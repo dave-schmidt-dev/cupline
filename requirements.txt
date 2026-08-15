@@ -1,0 +1,12 @@
+# Pinned to what was actually verified against iTerm2 3.6.11 on Python 3.14.7.
+#
+# iterm2 2.20 declares websockets with no upper bound and prefers the deprecated
+# websockets.legacy.client for its unix-socket connection. websockets 16.0 still
+# ships that module, so the pair works — but an unpinned install resolves to
+# whatever is newest, which is not the environment this was verified in.
+iterm2==2.20
+websockets==16.0
+protobuf==7.35.1
+
+# Test suite. Runs entirely on fake iTerm2 objects; no terminal required.
+pytest==9.1.1

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.zerodelta.cupline</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>__CUPLINE_DIR__/cupline.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__CUPLINE_DIR__</string>
+
+  <!-- cupline exits when the iTerm2 API socket goes away, which is what makes
+       this a lifetime tie rather than a poll: launchd restarts it, it fails
+       fast while iTerm2 is closed, and it stays up once iTerm2 is back. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Retry spacing while iTerm2 is closed. Low enough that cupline is running
+       within seconds of iTerm2 opening, high enough that a closed iTerm2 costs
+       nothing measurable. -->
+  <key>ThrottleInterval</key>
+  <integer>15</integer>
+
+  <key>StandardOutPath</key>
+  <string>__CUPLINE_DIR__/.logs/cupline-agent.log</string>
+  <key>StandardErrorPath</key>
+  <string>__CUPLINE_DIR__/.logs/cupline-agent.log</string>
+</dict>
+</plist>

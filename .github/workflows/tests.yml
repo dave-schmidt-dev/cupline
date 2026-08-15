@@ -1,0 +1,31 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    # The suite runs entirely on fake iTerm2 objects and needs no terminal, so
+    # Linux is fine here even though cupline itself is macOS-only at runtime.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest tests/ -q
+
+      - name: Assert the classifier never imports iterm2
+        # The project's core architectural rule: classification must not depend
+        # on the terminal layer, or on knowing which agent produced the text.
+        run: |
+          ! grep -qE "^\s*(import iterm2|from iterm2)" models.py classifier.py
