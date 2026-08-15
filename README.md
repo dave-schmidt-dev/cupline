@@ -181,15 +181,40 @@ launchd requires absolute paths, so the repo ships
 for your machine. The generated file is gitignored.
 
 ```bash
+# The interpreter that has iterm2 installed. This is the repo venv if you
+# followed Setup — override it if yours lives elsewhere, e.g. a shared
+# ~/.venvs/iterm2. Nothing downstream assumes the venv is inside the repo.
+PYTHON="$PWD/.venv/bin/python"
+
 sed -e "s#__CUPLINE_DIR__#$PWD#g" \
-    -e "s#__PYTHON__#$PWD/.venv/bin/python#" \
+    -e "s#__PYTHON__#$PYTHON#" \
     launchd/com.zerodelta.cupline.plist.template \
     > launchd/com.zerodelta.cupline.plist
+```
 
+Check the generated plist before handing it to launchd. A plist naming a
+path that does not exist still bootstraps cleanly and then fails on every
+launch, which surfaces as a service that is present but never running:
+
+```bash
+plutil -lint launchd/com.zerodelta.cupline.plist          # expect: OK
+"$PYTHON" -c "import iterm2"                              # expect: no output
+grep -c '__' launchd/com.zerodelta.cupline.plist          # expect: 0
+```
+
+Then install and start it:
+
+```bash
 ln -sfn "$PWD/launchd/com.zerodelta.cupline.plist" ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.zerodelta.cupline.plist
 launchctl print gui/$(id -u)/com.zerodelta.cupline | grep -E "state|pid"
 ```
+
+`state = running` with a pid is the only success signal. A plist naming an
+interpreter that does not exist reports `state = spawn scheduled`, no pid, and
+`last exit code = 78: EX_CONFIG` — verified by bootstrapping one deliberately.
+For any other startup failure the process runs and then dies, so read
+`.logs/cupline-agent.log`, which is where launchd sends stdout and stderr.
 
 To stop it, and to stop it coming back:
 
@@ -247,6 +272,7 @@ gitignored and the corpus stays local. **Review by hand before sharing any fixtu
 ## Conventions
 
 - All files self-contained under this directory.
+- Work is tracked in `TASKS.md`, not GitHub Issues, despite the repo being public. This is a deliberate exception to the usual "Issues once a repo exists" rule — `TASKS.md` is gitignored here, so the queue stays local and open defects are not published alongside the code.
 - Secrets in BWS. Never committed. Captured fixtures are reviewed by hand before they land.
 - Update `HISTORY.md` alongside every meaningful change. Bug entries follow the format: `- [bug] <description> | files: path/a.py, path/b.ts`.
 - Tests verify real behavior — no smoke-only "did it run" checks.
