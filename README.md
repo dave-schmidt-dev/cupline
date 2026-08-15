@@ -88,6 +88,14 @@ set for states that need a human — clearing the title hands the tab back to
 iTerm2's automatic name, which is normally the agent's current task and more
 useful than a static label. A tab whose title you set by hand is left alone.
 
+**Colour carries no such guarantee.** A tab title is checked before being
+touched; a tab *colour* is not. cupline turns `use_tab_color` off whenever it
+clears a pane, and `reset_all` does the same across every tab at startup, so a
+tab colour you set by hand in an agent's tab is switched off rather than
+restored — including on panes cupline is not itself watching. If you colour tabs
+manually, expect to lose that in any window cupline monitors. Saving and
+restoring the pre-existing colour is open work.
+
 An `UNKNOWN` reading holds the tab's colour rather than clearing it, so the tab
 does not flicker every time an agent's screen becomes momentarily unreadable.
 The hold is not indefinite: it lasts only while the screen that produced the
