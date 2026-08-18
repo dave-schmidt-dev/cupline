@@ -88,13 +88,17 @@ set for states that need a human — clearing the title hands the tab back to
 iTerm2's automatic name, which is normally the agent's current task and more
 useful than a static label. A tab whose title you set by hand is left alone.
 
-**Colour carries no such guarantee.** A tab title is checked before being
-touched; a tab *colour* is not. cupline turns `use_tab_color` off whenever it
-clears a pane, and `reset_all` does the same across every tab at startup, so a
-tab colour you set by hand in an agent's tab is switched off rather than
-restored — including on panes cupline is not itself watching. If you colour tabs
-manually, expect to lose that in any window cupline monitors. Saving and
-restoring the pre-existing colour is open work.
+**Colour is preserved the same way.** A pane's existing tab colour is read once,
+immediately before cupline first paints it, and put back when the pane is
+cleared or on shutdown — the stored colour as well as the `use_tab_color` flags,
+since painting overwrites both. A pane cupline has never painted is not written
+to at all, so an unwatched split sharing a tab with an agent keeps whatever you
+gave it.
+
+Two exceptions, both deliberate. The **active** pane carries its tab's aggregate
+state so the tab bar stays correct whichever pane has focus, so it is painted
+even when it is not an agent. And `--reset` is unconditional: it runs in a fresh
+process that painted nothing and so has nothing to put back.
 
 An `UNKNOWN` reading holds the tab's colour rather than clearing it, so the tab
 does not flicker every time an agent's screen becomes momentarily unreadable.

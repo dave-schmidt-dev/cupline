@@ -6,20 +6,41 @@ profile update to every pane on every sweep tick.
 """
 
 import asyncio
+import json
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import iterm2  # noqa: E402
 
 from models import AgentState, PaneVerdict  # noqa: E402
 from tab_state import TabPainter, _profile_for  # noqa: E402
 from config import STATE_COLORS  # noqa: E402
 
 
+class FakeProfile:
+    """Just the tab-colour half of an iTerm2 profile."""
+
+    def __init__(self, use=False, color=None):
+        self.use_tab_color = use
+        self.use_tab_color_dark = use
+        self.use_tab_color_light = use
+        self.tab_color = color
+        self.tab_color_dark = color
+        self.tab_color_light = color
+
+
 class FakeSession:
-    def __init__(self, session_id):
+    def __init__(self, session_id, profile=None):
         self.session_id = session_id
         self.pushes = []
+        #: What the pane looked like before cupline saw it. The default is the
+        #: ordinary case: no manual tab colour.
+        self.profile = profile or FakeProfile()
+
+    async def async_get_profile(self):
+        return self.profile
 
     async def async_set_profile_properties(self, profile):
         self.pushes.append(profile)
@@ -598,8 +619,18 @@ def test_a_pane_opened_mid_tab_is_painted_without_disturbing_its_settled_sibling
     verdicts["t1-p2"] = PaneVerdict(AgentState.WORKING, True)
     assert run(painter.apply(tab, AgentState.WAITING, per_pane=verdicts)) is True
     assert [len(s.pushes) for s in tab.sessions[:2]] == before
-    assert len(new_pane.pushes) == 1
+    # WORKING carries no colour, and this pane has never been painted, so there
+    # is nothing to push and nothing of ours to undo. Pushing a "clear" at it
+    # anyway is what used to destroy a hand-set tab colour (Task 11).
+    assert len(new_pane.pushes) == 0
     assert painter.pane_applied["t1-p2"] is AgentState.WORKING
+
+    # It is painted the moment it actually needs a colour, though — the point
+    # of the test is that a mid-tab pane is not missed.
+    verdicts["t1-p2"] = PaneVerdict(AgentState.WAITING, True)
+    run(painter.apply(tab, AgentState.WAITING, per_pane=verdicts))
+    assert len(new_pane.pushes) == 1
+    assert painter.pane_applied["t1-p2"] is AgentState.WAITING
 
 
 def test_wanted_is_empty_for_a_tab_with_no_sessions():
@@ -684,3 +715,125 @@ def test_a_backgrounded_pane_does_not_hold_an_aggregate_it_never_earned():
     assert painter.pane_applied["t1-p0"] is AgentState.WORKING, (
         "a background pane kept a red it had only ever carried on the tab's behalf"
     )
+
+
+# -- a colour cupline did not set is not cupline's to remove ---------------
+# `_profile_for(None)` switched all three `use_tab_color` flags off, and
+# `_wanted` produces a state for *every* session in any tab holding an agent —
+# including panes cupline does not watch. So a pane the user had coloured by
+# hand was silently un-coloured on the first sweep and never given it back.
+
+
+def _last_push(session):
+    return {k: json.loads(v) for k, v in session.pushes[-1].values.items()}
+
+
+def test_a_hand_set_tab_colour_survives_being_painted_and_restored():
+    """The headline case: paint over a manual colour, then give it back.
+
+    Both halves are restored. The flag alone is not enough — painting also
+    overwrites the stored colour, so a pane restored to `use=True` with amber
+    still in the slot would come back the wrong colour rather than its own.
+    """
+    manual = iterm2.Color(10, 20, 30)
+    tab = FakeTab("t1", pane_count=1, active="t1-p0")
+    tab.sessions[0].profile = FakeProfile(use=True, color=manual)
+    painter = TabPainter()
+
+    run(painter.apply(tab, AgentState.WAITING))
+    assert tab.sessions[0].pushes, "the pane was never painted amber to begin with"
+
+    run(painter.restore_painted(FakeApp([tab])))
+
+    restored = _last_push(tab.sessions[0])
+    assert restored["Use Tab Color"] is True
+    assert restored["Use Tab Color (Dark)"] is True
+    assert restored["Use Tab Color (Light)"] is True
+    assert restored["Tab Color"] == manual.get_dict()
+    assert restored["Tab Color (Dark)"] == manual.get_dict()
+
+
+def test_a_pane_with_no_colour_of_its_own_is_still_returned_to_none():
+    """The ordinary case must not regress into leaving amber behind."""
+    tab = FakeTab("t1", pane_count=1, active="t1-p0")
+    painter = TabPainter()
+
+    run(painter.apply(tab, AgentState.WAITING))
+    run(painter.restore_painted(FakeApp([tab])))
+
+    restored = _last_push(tab.sessions[0])
+    assert restored["Use Tab Color"] is False
+    assert restored["Use Tab Color (Dark)"] is False
+    assert restored["Use Tab Color (Light)"] is False
+
+
+def test_a_pane_cupline_never_painted_is_left_entirely_alone():
+    """An unwatched pane sharing a tab with an agent used to be pushed a clear.
+
+    The active pane stays a deliberate exception: it carries the tab aggregate
+    so the tab bar is correct whichever pane has focus, and that is documented
+    at the top of tab_state.py.
+    """
+    tab = FakeTab("t1", pane_count=2, active="t1-p0")
+    stranger = tab.sessions[1]
+    stranger.profile = FakeProfile(use=True, color=iterm2.Color(9, 9, 9))
+    painter = TabPainter()
+
+    run(painter.apply(tab, AgentState.WAITING, per_pane={
+        "t1-p0": PaneVerdict(AgentState.WAITING, True),
+        # t1-p1 has no verdict at all — unwatched, or never read.
+    }))
+
+    assert stranger.pushes == [], "an unwatched pane had its profile rewritten"
+
+
+def test_the_prior_appearance_is_read_before_the_first_push():
+    """Reading it later would capture cupline's own colour as the user's."""
+    tab = FakeTab("t1", pane_count=1, active="t1-p0")
+    session = tab.sessions[0]
+    session.profile = FakeProfile(use=True, color=iterm2.Color(7, 7, 7))
+
+    pushes_at_read = []
+    original = session.async_get_profile
+
+    async def spy():
+        pushes_at_read.append(len(session.pushes))
+        return await original()
+
+    session.async_get_profile = spy
+    run(TabPainter().apply(tab, AgentState.WAITING))
+
+    assert pushes_at_read == [0], \
+        f"profile read after {pushes_at_read} pushes; it must precede the first"
+
+
+def test_an_unreadable_profile_falls_back_to_clearing(caplog):
+    """No basis for claiming a colour, so assume the common case: none."""
+    tab = FakeTab("t1", pane_count=1, active="t1-p0")
+    session = tab.sessions[0]
+
+    async def broken():
+        raise RuntimeError("profile unavailable")
+
+    session.async_get_profile = broken
+    painter = TabPainter()
+
+    run(painter.apply(tab, AgentState.WAITING))
+    run(painter.restore_painted(FakeApp([tab])))
+
+    assert _last_push(session)["Use Tab Color"] is False
+
+
+def test_reset_all_is_still_deliberately_unconditional():
+    """Crash recovery captured nothing, so it has nothing to put back.
+
+    `--reset` runs in a fresh process that painted no pane. Restoring is not
+    available to it, and leaving stranded amber behind would defeat the whole
+    command — so it stays blunt, and nothing calls it automatically.
+    """
+    tab = FakeTab("t1", pane_count=1, active="t1-p0")
+    tab.sessions[0].profile = FakeProfile(use=True, color=iterm2.Color(4, 5, 6))
+
+    run(TabPainter().reset_all(FakeApp([tab])))
+
+    assert _last_push(tab.sessions[0])["Use Tab Color"] is False

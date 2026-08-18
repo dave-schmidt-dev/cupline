@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from typing import Iterable, Optional
+from typing import Iterable, NamedTuple, Optional
 
 import iterm2
 
@@ -40,6 +40,44 @@ from config import HOLD_ON_UNKNOWN, STATE_COLORS, STATE_WORDS, TITLE_SEPARATOR
 from models import AgentState, PaneVerdict, most_urgent
 
 log = logging.getLogger("cupline.tab")
+
+
+class _PriorAppearance(NamedTuple):
+    """A pane's tab-colour state before cupline first touched it.
+
+    Both halves matter. Painting overwrites the stored colour *and* switches the
+    ``use_`` flags on, so putting a hand-set colour back needs all six values,
+    not just the flags.
+    """
+
+    use: bool
+    use_dark: bool
+    use_light: bool
+    color: object = None
+    color_dark: object = None
+    color_light: object = None
+
+
+#: What a pane whose profile could not be read is assumed to have had: no tab
+#: colour. That is the old unconditional behaviour, kept as the fallback because
+#: it is the common case — most panes have no manual colour — and because an
+#: unreadable profile is no basis for claiming otherwise.
+_PRIOR_OFF = _PriorAppearance(False, False, False)
+
+
+def _restore_profile(prior: _PriorAppearance) -> iterm2.LocalWriteOnlyProfile:
+    """Put back exactly what a pane had before cupline first painted it."""
+    profile = iterm2.LocalWriteOnlyProfile()
+    if prior.color is not None:
+        profile.set_tab_color(prior.color)
+    if prior.color_dark is not None:
+        profile.set_tab_color_dark(prior.color_dark)
+    if prior.color_light is not None:
+        profile.set_tab_color_light(prior.color_light)
+    profile.set_use_tab_color(prior.use)
+    profile.set_use_tab_color_dark(prior.use_dark)
+    profile.set_use_tab_color_light(prior.use_light)
+    return profile
 
 
 def _profile_for(color: Optional[tuple[int, int, int]]) -> iterm2.LocalWriteOnlyProfile:
@@ -83,6 +121,13 @@ class TabPainter:
         self.pane_own: dict[str, AgentState] = {}
         #: tab_id -> last title pushed (None means "iTerm2's automatic name").
         self.titled: dict[str, Optional[str]] = {}
+        #: session_id -> what that pane's tab colour was before cupline first
+        #: painted it. Read once, on first touch. Clearing used to hardcode the
+        #: ``use_`` flags to False, so a pane the user had coloured by hand was
+        #: silently un-coloured and never given it back. State that has to be
+        #: *restored* cannot be assumed — the same defect class as the `colored`
+        #: bug fixed on 2026-08-14.
+        self.pane_prior: dict[str, _PriorAppearance] = {}
 
     @property
     def colored(self) -> set[str]:
@@ -105,6 +150,47 @@ class TabPainter:
     def painted(self) -> set[str]:
         """Tabs this process has coloured and has not yet cleared."""
         return self.colored
+
+    @staticmethod
+    async def _read_prior(session) -> _PriorAppearance:
+        """Read a pane's existing tab colour, before anything is pushed to it."""
+        try:
+            profile = await session.async_get_profile()
+            return _PriorAppearance(
+                use=bool(profile.use_tab_color),
+                use_dark=bool(profile.use_tab_color_dark),
+                use_light=bool(profile.use_tab_color_light),
+                color=profile.tab_color,
+                color_dark=profile.tab_color_dark,
+                color_light=profile.tab_color_light,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "could not read prior tab colour for %s (%s); "
+                "assuming it had none", session.session_id, exc,
+            )
+            return _PRIOR_OFF
+
+    async def _paint(self, session, color: Optional[tuple[int, int, int]]) -> bool:
+        """Push one pane's colour. False means deliberately left untouched.
+
+        Capturing happens here, immediately before the first push to a pane, so
+        every path that paints also records what it painted over.
+        """
+        sid = session.session_id
+        if color is None and sid not in self.pane_prior:
+            # Nothing of ours to undo. Pushing a clear anyway is precisely what
+            # destroyed a hand-set colour on a pane cupline does not even watch:
+            # `_wanted` produces a state for every session in any tab holding an
+            # agent, and a clear switched `use_tab_color` off unconditionally.
+            return False
+        if sid not in self.pane_prior:
+            self.pane_prior[sid] = await self._read_prior(session)
+        await session.async_set_profile_properties(
+            _restore_profile(self.pane_prior[sid]) if color is None
+            else _profile_for(color)
+        )
+        return True
 
     @staticmethod
     def aggregate(states: Iterable[AgentState]) -> AgentState:
@@ -228,6 +314,7 @@ class TabPainter:
             self.pane_applied.pop(sid, None)
             self.pane_tab.pop(sid, None)
             self.pane_own.pop(sid, None)
+            self.pane_prior.pop(sid, None)
         # Dedupe on the whole per-pane picture, not the tab aggregate. The
         # aggregate can sit still while an individual pane changes state, and it
         # sits still every time focus moves between panes — both of which have to
@@ -251,8 +338,11 @@ class TabPainter:
                 pushed += 1  # already correct on screen; still counts as landed
                 continue
             try:
-                await session.async_set_profile_properties(
-                    _profile_for(STATE_COLORS.get(want)))
+                await self._paint(session, STATE_COLORS.get(want))
+                # Recorded even when `_paint` declined to touch the pane: the
+                # bookkeeping is "this pane carries no colour of ours", which is
+                # true either way, and it keeps the dedupe from re-deciding the
+                # same thing every sweep.
                 self.pane_applied[sid] = want
                 self.pane_tab[sid] = tab.tab_id
                 pushed += 1
@@ -289,11 +379,14 @@ class TabPainter:
         return True
 
     async def clear(self, tab) -> None:
-        """Return a tab to default colour and iTerm2's automatic title.
+        """Return a tab to the appearance it had before cupline touched it.
 
         Passes no ``per_pane``, so every pane is cleared rather than just the
         active one. Leaving that out would strand a background pane's colour on
         shutdown, where it would outlive the process that can explain it.
+
+        "Cleared" means restored, not blanked: panes cupline painted get back
+        whatever they had, and panes it never painted are not touched at all.
         """
         await self.apply(tab, AgentState.WORKING, force=True)
 
@@ -302,6 +395,12 @@ class TabPainter:
 
         If cupline dies while tabs are amber, the colour persists — it lives
         in iTerm2's profile state, not in this process.
+
+        Deliberately still unconditional, unlike ``clear``. This runs from
+        ``--reset`` in a *fresh* process that painted nothing and therefore
+        captured nothing, so there is no prior appearance to put back; the
+        blunt instrument is the whole point of the command. A manual tab colour
+        is collateral here, which is why nothing calls this automatically.
         """
         cleared = 0
         profile = _profile_for(None)
@@ -321,6 +420,7 @@ class TabPainter:
         self.pane_applied.clear()
         self.pane_tab.clear()
         self.pane_own.clear()
+        self.pane_prior.clear()
         self.titled.clear()
         log.info("reset tab colour and title on %d sessions", cleared)
         return cleared
