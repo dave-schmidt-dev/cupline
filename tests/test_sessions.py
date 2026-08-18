@@ -4,9 +4,15 @@ The chains below are real, captured from a live run — see RESEARCH.md. They ar
 the reason identification does not use iTerm2's ``jobName`` directly.
 """
 
+import asyncio
+import logging
 import os
+import shutil
+import subprocess
 import sys
 import time
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -181,3 +187,130 @@ def test_depth_cap_terminates_on_a_cycle(monkeypatch):
 def test_basename_strips_leading_dash():
     assert sessions._basename("-zsh") == "zsh"
     assert sessions._basename("/usr/bin/login") == "login"
+
+
+# -- reading the process table --------------------------------------------
+# `ps` used to run through a synchronous `subprocess.run` reached from an
+# awaited call, so a slow read froze the whole event loop — no streamer
+# callbacks, no sweeps, no signal handling — for up to five seconds.
+
+
+def _failing_ps(message="ps timed out"):
+    async def boom():
+        raise OSError(message)
+    return boom
+
+
+def test_a_slow_ps_does_not_stall_the_loop(monkeypatch):
+    """Ordering is the discriminator, not completion.
+
+    A blocking read runs to the end before anything else gets a turn, so `ps`
+    would come first. Both orderings finish, which is why asserting that the
+    concurrent work merely *completed* would prove nothing.
+    """
+    order = []
+
+    async def slow_ps():
+        await asyncio.sleep(0.05)
+        order.append("ps")
+        return "1 0 -zsh\n"
+
+    async def scenario():
+        monkeypatch.setattr(sessions, "_run_ps", slow_ps)
+        monkeypatch.setattr(sessions, "_PS_CACHE", {}, raising=False)
+
+        async def concurrent_sweep():
+            await asyncio.sleep(0.005)
+            order.append("sweep")
+
+        await asyncio.gather(
+            sessions.refresh_process_table(force=True), concurrent_sweep()
+        )
+
+    asyncio.run(scenario())
+    assert order == ["sweep", "ps"], f"the sweep waited on ps: {order}"
+
+
+@pytest.mark.skipif(shutil.which("pgrep") is None, reason="needs pgrep")
+def test_a_timed_out_ps_is_killed_rather_than_left_running(monkeypatch):
+    """`wait_for` cancels the await, not the process.
+
+    Without an explicit kill the timed-out reader keeps running and is never
+    reaped, so the 27 timeouts observed in half an hour would have left 27
+    stranded children behind them.
+    """
+    monkeypatch.setattr(sessions, "_PS_COMMAND", ("sleep", "30"))
+    monkeypatch.setattr(sessions, "PS_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr(sessions, "_PS_CACHE", {}, raising=False)
+
+    asyncio.run(sessions.refresh_process_table(force=True))
+
+    survivors = subprocess.run(
+        ["pgrep", "-P", str(os.getpid()), "sleep"],
+        capture_output=True, text=True, check=False,
+    ).stdout.split()
+    assert not survivors, f"timed-out reader left running: {survivors}"
+
+
+def test_a_ps_failure_keeps_previously_identified_sessions(monkeypatch):
+    """Identification degrades to stale, never to empty.
+
+    This is what rules out the mass case: a `ps` outage cannot unresolve every
+    session at once and strip tab colour everywhere.
+    """
+    install_table(monkeypatch, CLAUDE_CHAIN)
+    monkeypatch.setattr(sessions, "_run_ps", _failing_ps())
+
+    asyncio.run(sessions.refresh_process_table(force=True))
+
+    assert sessions.resolve_agent(93140) == "claude", \
+        "a ps failure unresolved an agent that was already identified"
+
+
+def test_a_cold_start_failure_says_so_in_its_own_words(monkeypatch, caplog):
+    """With an empty cache *nothing* resolves, which looks like "no agents".
+
+    Same failure, categorically different consequence from the degraded-to-
+    stale case, so it does not share its log line.
+    """
+    monkeypatch.setattr(sessions, "_PS_CACHE", {}, raising=False)
+    monkeypatch.setattr(sessions, "_run_ps", _failing_ps())
+
+    with caplog.at_level(logging.WARNING, logger="cupline.sessions"):
+        asyncio.run(sessions.refresh_process_table(force=True))
+
+    assert "no cached table" in caplog.text
+    assert sessions.resolve_agent(93140) is None
+
+
+def test_a_slow_but_successful_read_is_still_reported(monkeypatch, caplog):
+    """Going async removes the stall, which was the only symptom of Task 10.
+
+    A read that takes seconds is the open question; if converting it to asyncio
+    also stopped it being *visible*, the evidence trail would go with the
+    freeze.
+    """
+    async def slow_ps():
+        await asyncio.sleep(0.02)
+        return "1 0 -zsh\n"
+
+    monkeypatch.setattr(sessions, "_run_ps", slow_ps)
+    monkeypatch.setattr(sessions, "PS_SLOW_SECONDS", 0.001)
+    monkeypatch.setattr(sessions, "_PS_CACHE", {}, raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="cupline.sessions"):
+        asyncio.run(sessions.refresh_process_table(force=True))
+
+    assert "ps took" in caplog.text
+
+
+def test_the_real_reader_returns_a_usable_table():
+    """One end-to-end read against the actual process table.
+
+    Everything above patches `_run_ps` out, so without this the real command,
+    its decoding and its parsing are never executed at all.
+    """
+    table = asyncio.run(sessions.refresh_process_table(force=True))
+    assert len(table) > 1
+    assert all(isinstance(k, int) and isinstance(v[0], int) for k, v in table.items())
+    assert any(cmd for _, cmd in table.values())

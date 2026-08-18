@@ -16,8 +16,9 @@ chain. A Claude Code session running an MCP server resolves as:
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
-import subprocess
 import time
 from typing import Optional
 
@@ -26,6 +27,8 @@ import iterm2
 from config import (
     AGENT_COMMANDS,
     MAX_ANCESTRY_DEPTH,
+    PS_SLOW_SECONDS,
+    PS_TIMEOUT_SECONDS,
     SESSION_ROOT_COMMANDS,
     SHELL_NAMES,
 )
@@ -40,23 +43,87 @@ _PS_CACHE_AT: float = 0.0
 _PS_CACHE_TTL = 2.0
 
 
-def _process_table(force: bool = False) -> dict[int, tuple[int, str]]:
-    """Map pid -> (ppid, command). One fork for the whole process tree."""
+#: Kept as a module constant so a test can point the reader at a command whose
+#: timing it controls, without a live process table in the picture.
+_PS_COMMAND = ("ps", "-Ao", "pid=,ppid=,comm=")
+
+
+async def _run_ps() -> str:
+    """Read the process table without blocking the event loop."""
+    proc = await asyncio.create_subprocess_exec(
+        *_PS_COMMAND,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(
+            proc.communicate(), timeout=PS_TIMEOUT_SECONDS
+        )
+    except (TimeoutError, asyncio.CancelledError):
+        # `wait_for` cancels the *await*, not the process. Without this the
+        # timed-out `ps` keeps running and is never reaped, so the 27 timeouts
+        # observed in half an hour would have been 27 stranded children.
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        with contextlib.suppress(Exception):
+            await proc.wait()
+        raise
+    if proc.returncode != 0:
+        raise OSError(f"ps exited {proc.returncode}")
+    return stdout.decode(errors="replace")
+
+
+def _process_table() -> dict[int, tuple[int, str]]:
+    """The cached pid -> (ppid, command) map. Never forks.
+
+    Refreshing is an ``await`` now, so it lives in ``refresh_process_table``
+    and this only reads what that last stored.
+    """
+    return _PS_CACHE
+
+
+async def refresh_process_table(force: bool = False) -> dict[int, tuple[int, str]]:
+    """Rebuild the process table, off the event loop.
+
+    This used to be a synchronous ``subprocess.run`` reached from an awaited
+    call, so for up to the full timeout the entire loop was frozen: no screen
+    streamer callbacks, no sweeps, no signal handling, nothing on any output
+    surface. That is the project's no-silent-waits rule, not a style point.
+
+    The timeout is still *reported* rather than smoothed away. Making the read
+    async removes the freeze, and the freeze was the only symptom pointing at
+    whatever makes an 0.04 s command exceed five seconds inside this process —
+    so a slow-but-successful read is logged too, or the evidence trail for that
+    open question disappears with the stall.
+    """
     global _PS_CACHE, _PS_CACHE_AT
     now = time.monotonic()
     if not force and _PS_CACHE and (now - _PS_CACHE_AT) < _PS_CACHE_TTL:
         return _PS_CACHE
 
-    table: dict[int, tuple[int, str]] = {}
+    started = time.monotonic()
     try:
-        out = subprocess.run(
-            ["ps", "-Ao", "pid=,ppid=,comm="],
-            capture_output=True, text=True, timeout=5, check=True,
-        ).stdout
-    except (subprocess.SubprocessError, OSError) as exc:
-        log.warning("ps failed, agent identification degraded: %s", exc)
+        out = await _run_ps()
+    except Exception as exc:  # noqa: BLE001
+        if _PS_CACHE:
+            log.warning(
+                "ps failed after %.1fs, agent identification degraded to a "
+                "%.1fs-old table: %s",
+                time.monotonic() - started, now - _PS_CACHE_AT, exc,
+            )
+        else:
+            # Cold start. There is no stale table to fall back on, so *no*
+            # session resolves as an agent — on screen that is indistinguishable
+            # from "no agents are running", which is why it gets its own line.
+            log.warning(
+                "ps failed after %.1fs with no cached table (%s); no session "
+                "can be identified as an agent until this succeeds",
+                time.monotonic() - started, exc,
+            )
         return _PS_CACHE
 
+    elapsed = time.monotonic() - started
+    table: dict[int, tuple[int, str]] = {}
     for line in out.splitlines():
         parts = line.split(None, 2)
         if len(parts) < 3:
@@ -67,6 +134,12 @@ def _process_table(force: bool = False) -> dict[int, tuple[int, str]]:
             continue
         table[pid] = (ppid, parts[2].strip())
     _PS_CACHE, _PS_CACHE_AT = table, now
+    if elapsed >= PS_SLOW_SECONDS:
+        log.warning(
+            "ps took %.2fs for %d processes; the loop stayed responsive, but "
+            "this is the read that has been timing out",
+            elapsed, len(table),
+        )
     return table
 
 
@@ -90,11 +163,17 @@ def _is_session_root(name: str) -> bool:
     return any(name.startswith(root) for root in SESSION_ROOT_COMMANDS)
 
 
-def resolve_agent(pid: Optional[int], force_refresh: bool = False) -> Optional[str]:
+def resolve_agent(pid: Optional[int]) -> Optional[str]:
     """Walk the ancestry of ``pid`` and return the agent command, if any.
 
     Returns None for ordinary shells and non-agent programs, which is what gates
     a session out of cupline entirely.
+
+    Reads the cached process table and never refreshes it — refreshing is an
+    ``await`` now and this is synchronous. Callers must have awaited
+    ``refresh_process_table`` first; ``describe`` and ``refresh_agents`` both
+    do. The old ``force_refresh`` parameter is gone rather than kept as a
+    silent no-op.
 
     The walk passes *through* non-login shells. It previously stopped at any
     shell, which meant an agent running a command (``claude`` -> ``zsh`` -> the
@@ -103,7 +182,7 @@ def resolve_agent(pid: Optional[int], force_refresh: bool = False) -> Optional[s
     """
     if not pid:
         return None
-    table = _process_table(force=force_refresh)
+    table = _process_table()
     current, depth = pid, 0
     while current and current != 1 and depth < MAX_ANCESTRY_DEPTH:
         entry = table.get(current)
@@ -128,6 +207,9 @@ def resolve_agent(pid: Optional[int], force_refresh: bool = False) -> Optional[s
 
 async def describe(session, tab, window) -> SessionState:
     """Build a SessionState from a live iTerm2 session."""
+    # TTL-guarded, so this is free on all but the first call of a sweep — but it
+    # has to happen, or a cold cache resolves every session's agent as None.
+    await refresh_process_table()
     job_name = await session.async_get_variable("jobName")
     job_pid = await session.async_get_variable("jobPid")
     try:
@@ -225,7 +307,7 @@ class SessionRegistry:
         of the sweep — so **one** closed pane left **every** pane unclassified
         and unpainted for that tick. Caught in production at 22:21:33.
         """
-        _process_table(force=True)
+        await refresh_process_table(force=True)
         for window in app.windows:
             for tab in window.tabs:
                 for session in tab.sessions:

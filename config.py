@@ -58,6 +58,14 @@ IDLE_AFTER_SECONDS = 5.0
 WATCHER_BACKOFF_BASE_SECONDS = 1.0
 WATCHER_BACKOFF_MAX_SECONDS = 60.0
 
+#: Ceiling on one process-table read. Standalone `ps` costs ~0.04 s here even
+#: at load 137, so this is ~100x headroom — and it has still been exceeded 27
+#: times in half an hour from inside the running service. PS_SLOW_SECONDS is
+#: where a *successful* read starts being reported, so converting the read to
+#: asyncio does not silently delete the only symptom of that.
+PS_TIMEOUT_SECONDS = 5.0
+PS_SLOW_SECONDS = 1.0
+
 #: Lines of visible screen handed to the classifier. The screen is ~50-80 rows;
 #: the interesting part of an agent turn is nearly always the bottom.
 TAIL_LINES = 40
