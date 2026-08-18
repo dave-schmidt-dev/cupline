@@ -206,10 +206,10 @@ def resolve_agent(pid: Optional[int]) -> Optional[str]:
 
 
 async def describe(session, tab, window) -> SessionState:
-    """Build a SessionState from a live iTerm2 session."""
-    # TTL-guarded, so this is free on all but the first call of a sweep — but it
-    # has to happen, or a cold cache resolves every session's agent as None.
-    await refresh_process_table()
+    """Build a SessionState from a live iTerm2 session.
+
+    Assumes the caller has refreshed the process table; ``discover`` does.
+    """
     job_name = await session.async_get_variable("jobName")
     job_pid = await session.async_get_variable("jobPid")
     try:
@@ -253,6 +253,12 @@ class SessionRegistry:
 
     async def discover(self, app) -> list[SessionState]:
         """Enumerate all current sessions. Idempotent — safe to re-run."""
+        # Once for the whole pass, and deliberately *outside* the per-session
+        # guard below. Refreshing inside `describe` put it inside that guard,
+        # where a process-table failure would have been logged as a pane that
+        # vanished and skipped the session — a misattribution that would read
+        # as a closing pane forever.
+        await refresh_process_table()
         seen = set()
         found = []
         for window in app.windows:

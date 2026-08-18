@@ -11,6 +11,8 @@ import os
 import sys
 import time
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import sessions as sessionlib  # noqa: E402
@@ -793,5 +795,36 @@ def test_a_session_that_vanishes_before_its_watcher_opens_backs_off(monkeypatch)
         assert mon._watcher_failures["s1"] == 1
         assert "s1" in mon._watcher_retry_at
         assert mon.registry.states["s1"].streamer_ok is False
+
+    asyncio.run(scenario())
+
+
+def test_a_process_table_failure_is_not_reported_as_vanished_panes(monkeypatch, caplog):
+    """The refresh belongs outside the per-session guard, and this pins it there.
+
+    `describe()` used to refresh the process table itself, which put the refresh
+    inside discover()'s `except Exception` -> "session vanished" handler. Any
+    error escaping the refresh would then have been attributed to every pane in
+    turn as a pane that had closed — a whole-machine condition logged as a dozen
+    unrelated local ones, and the sessions skipped rather than described.
+
+    `refresh_process_table` swallows its own errors today, so this is a guard
+    against a future edit rather than a live bug: it fails the moment the
+    refresh moves back inside the guard.
+    """
+    async def scenario():
+        mon, _ = build(monkeypatch, [FakeSession("s1"), FakeSession("s2")])
+
+        async def exploding_refresh(force: bool = False):
+            raise OSError("process table unavailable")
+
+        monkeypatch.setattr(sessionlib, "refresh_process_table", exploding_refresh)
+
+        with caplog.at_level(logging.INFO, logger="cupline"):
+            with pytest.raises(OSError):
+                await mon.registry.discover(mon.app)
+
+        assert not any("vanished" in r.getMessage() for r in caplog.records), \
+            "a process-table failure was misreported as panes closing"
 
     asyncio.run(scenario())
