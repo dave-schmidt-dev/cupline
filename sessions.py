@@ -180,7 +180,16 @@ class SessionRegistry:
                     if session.session_id in self.states:
                         found.append(self.states[session.session_id])
                         continue
-                    state = await describe(session, tab, window)
+                    try:
+                        state = await describe(session, tab, window)
+                    except Exception as exc:  # noqa: BLE001
+                        # Same race as refresh_agents below: a pane can close
+                        # between this enumeration and the RPCs inside
+                        # describe(). It was never in the registry, so there is
+                        # nothing to drop — just do not let it end the walk.
+                        log.info("session %s vanished during discovery (%s)",
+                                 session.session_id, exc)
+                        continue
                     self.states[session.session_id] = state
                     found.append(state)
         # Drop sessions that vanished without a termination event reaching us.
@@ -188,8 +197,34 @@ class SessionRegistry:
             self.states.pop(gone, None)
         return found
 
+    @staticmethod
+    async def _refresh_one(session, state: SessionState) -> None:
+        """Re-read the per-session variables that change during its life.
+
+        Every ``await`` here is an RPC against a session that may have closed
+        since the caller enumerated it, so the whole body is one unit that the
+        caller guards — see ``refresh_agents``.
+        """
+        job_pid = await session.async_get_variable("jobPid")
+        try:
+            state.job_pid = int(job_pid) if job_pid else None
+        except (TypeError, ValueError):
+            state.job_pid = None
+        state.job_name = await session.async_get_variable("jobName")
+        state.agent = resolve_agent(state.job_pid)
+        # Agents change directory mid-session, so the project name is re-read
+        # rather than fixed at discovery.
+        state.project = project_name(await session.async_get_variable("path"))
+
     async def refresh_agents(self, app) -> None:
-        """Re-resolve agent identity. Cheap: one `ps` shared across sessions."""
+        """Re-resolve agent identity. Cheap: one `ps` shared across sessions.
+
+        Each session is guarded individually. iTerm2 answers
+        ``SESSION_NOT_FOUND`` for a pane that closed between the enumeration
+        above and the RPC below, and that used to propagate out of here and out
+        of the sweep — so **one** closed pane left **every** pane unclassified
+        and unpainted for that tick. Caught in production at 22:21:33.
+        """
         _process_table(force=True)
         for window in app.windows:
             for tab in window.tabs:
@@ -199,18 +234,17 @@ class SessionRegistry:
                         continue
                     state.tab_id = tab.tab_id          # panes can be moved
                     state.window_id = window.window_id
-                    job_pid = await session.async_get_variable("jobPid")
                     try:
-                        state.job_pid = int(job_pid) if job_pid else None
-                    except (TypeError, ValueError):
-                        state.job_pid = None
-                    state.job_name = await session.async_get_variable("jobName")
-                    state.agent = resolve_agent(state.job_pid)
-                    # Agents change directory mid-session, so the project name
-                    # is re-read rather than fixed at discovery.
-                    state.project = project_name(
-                        await session.async_get_variable("path")
-                    )
+                        await self._refresh_one(session, state)
+                    except Exception as exc:  # noqa: BLE001
+                        # Dropped rather than kept stale: the overwhelmingly
+                        # likely cause is that the pane is gone. If it is not,
+                        # the next discover() re-adds it, so the cost of being
+                        # wrong is one tick of identity — the same self-heal
+                        # the old behaviour had, minus taking its peers down.
+                        log.info("session %s vanished during refresh (%s); dropping",
+                                 session.session_id, exc)
+                        self.states.pop(session.session_id, None)
 
     def agent_sessions(self) -> list[SessionState]:
         return [s for s in self.states.values() if s.is_agent()]

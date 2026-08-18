@@ -41,11 +41,17 @@ class FakeSession:
         self.lines = list(lines)
         self.fetches = 0
         self.fail = False
+        #: when True, every variable read raises SESSION_NOT_FOUND
+        self.vanish = False
         #: called mid-await, to simulate a screen event landing during the fetch
         self.during_fetch = None
         self.pushes = []
 
     async def async_get_variable(self, name):
+        if self.vanish:
+            # What iTerm2 actually answers for a pane that closed between the
+            # caller's enumeration and this RPC.
+            raise RuntimeError("SESSION_NOT_FOUND")
         return {"jobPid": "1234", "jobName": "node", "path": "/tmp/demo",
                 "tty": "/dev/ttys001"}.get(name)
 
@@ -183,6 +189,61 @@ def test_rediscovery_reaps_the_watcher_of_a_vanished_session(monkeypatch):
         assert parked.cancelled()
 
     asyncio.run(scenario())
+
+
+def test_one_vanished_pane_does_not_abandon_its_peers(monkeypatch):
+    """Caught live at 22:21:33: one closed pane cost every pane its tick.
+
+    `refresh_agents` enumerates the windows, then awaits per session. A pane
+    that closes in between gets SESSION_NOT_FOUND, which used to propagate all
+    the way out to the blanket handler in `sweep_forever` — abandoning the tick,
+    so the *other* panes went unclassified and unpainted because one pane
+    closed. All three variable reads are covered, not just `jobPid`.
+    """
+    doomed = FakeSession("s1")
+    alive = FakeSession("s2", lines=["$ ready", "Do you want to proceed? (y/n)"])
+    mon, _ = build(monkeypatch, [doomed, alive])
+    asyncio.run(mon._sweep(0))            # baseline: both known and classified
+    assert {"s1", "s2"} <= set(mon.registry.states)
+
+    doomed.vanish = True
+    pushes_before = len(alive.pushes)
+    asyncio.run(mon._sweep(8))            # the periodic branch: refresh_agents runs
+
+    assert "s1" not in mon.registry.states, "a vanished session must be dropped"
+    peer = mon.registry.states["s2"]
+    assert peer.agent == "claude", "the peer lost its identity to its neighbour"
+    assert peer.previous_classification is not AgentState.UNKNOWN
+    assert len(alive.pushes) >= pushes_before, "the peer went unpainted"
+
+
+def test_a_vanished_pane_is_skipped_on_every_variable_read(monkeypatch):
+    """`jobName` and `path` are read the same unguarded way as `jobPid`.
+
+    The original code guarded only the `int()` cast, so a session surviving the
+    first read and dying before the third still took the sweep down.
+    """
+    class DiesLate(FakeSession):
+        def __init__(self, session_id):
+            super().__init__(session_id)
+            self.reads = 0
+
+        async def async_get_variable(self, name):
+            self.reads += 1
+            if self.vanish and name == "path":
+                raise RuntimeError("SESSION_NOT_FOUND")
+            return await FakeSession.async_get_variable(self, name)
+
+    doomed = DiesLate("s1")
+    alive = FakeSession("s2")
+    mon, _ = build(monkeypatch, [doomed, alive])
+    asyncio.run(mon._sweep(0))
+
+    doomed.vanish = True
+    asyncio.run(mon._sweep(8))            # must not raise
+
+    assert "s1" not in mon.registry.states
+    assert "s2" in mon.registry.states
 
 
 def test_sweep_survives_a_session_that_disappears_mid_tick(monkeypatch):
