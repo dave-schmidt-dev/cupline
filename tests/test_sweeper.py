@@ -6,6 +6,7 @@ all. Neither shows up as an error in the log; the tab just quietly stays wrong.
 """
 
 import asyncio
+import logging
 import os
 import sys
 import time
@@ -43,6 +44,8 @@ class FakeSession:
         self.fail = False
         #: when True, every variable read raises SESSION_NOT_FOUND
         self.vanish = False
+        #: when True, opening the screen streamer raises — the Task 15 case
+        self.streamer_fails = False
         #: called mid-await, to simulate a screen event landing during the fetch
         self.during_fetch = None
         self.pushes = []
@@ -66,6 +69,27 @@ class FakeSession:
 
     async def async_set_profile_properties(self, profile):
         self.pushes.append(profile)
+
+    def get_screen_streamer(self, want_contents=False):
+        return FakeStreamerCM(self.streamer_fails)
+
+
+class FakeStreamerCM:
+    """iTerm2's screen streamer is a sync call returning an async CM."""
+
+    def __init__(self, fails):
+        self.fails = fails
+
+    async def __aenter__(self):
+        if self.fails:
+            raise RuntimeError("streamer refused")
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def async_get(self):
+        await asyncio.Event().wait()  # park; tests inject events directly
 
 
 class FakeTab:
@@ -110,7 +134,21 @@ def build(monkeypatch, sessions):
     monkeypatch.setattr(sessionlib, "resolve_agent", lambda pid, **kw: "claude")
     app = FakeApp([FakeWindow("w0", [FakeTab("t0", sessions)])])
     mon = Cupline(connection=None, app=app, show_tail=False, debounce=1.5)
-    mon._ensure_watcher = lambda session_id: None  # no real streamers in tests
+
+    def stub_watcher(session_id):
+        """Stand in for a streamer that opened successfully.
+
+        There are no real streamers here, but marking the session's redraw clock
+        as fed is exactly what a live watcher does the moment it opens — and the
+        classifier abstains when that clock is not being fed, so a stub that
+        skips it would run the whole suite through the dead-streamer path
+        instead of the one under test.
+        """
+        state = mon.registry.states.get(session_id)
+        if state is not None:
+            state.streamer_ok = True
+
+    mon._ensure_watcher = stub_watcher
     return mon, app
 
 
@@ -638,3 +676,122 @@ def test_a_tab_whose_agent_quits_does_not_stay_coloured(monkeypatch):
     assert tab.tab_id not in mon.painter.colored, (
         "the tab kept an alert for an agent that no longer exists"
     )
+
+
+# -- the dead-streamer path -----------------------------------------------
+# The redraw clock is the primary signal and the streamer is the only thing
+# that advances it, so a streamer that dies does not degrade detection — it
+# inverts it. These three cover the failure being loud, bounded, and not
+# mistaken for a stop.
+
+
+def test_a_dead_streamer_warns_and_backs_off(monkeypatch, caplog):
+    """It used to fail silently and respawn forever.
+
+    The failure was a single `log.debug` against a file handler set to WARNING,
+    so nothing was recorded anywhere — while `_ensure_watcher` saw a finished
+    task on every sweep and created another, a create-and-die loop at 2 Hz with
+    no backoff and no ceiling.
+    """
+    async def scenario():
+        session = FakeSession("s1")
+        session.streamer_fails = True
+        mon, _ = build(monkeypatch, [session])
+        del mon._ensure_watcher          # use the real one, not the stub
+        await mon.registry.discover(mon.app)
+
+        with caplog.at_level(logging.WARNING, logger="cupline"):
+            mon._ensure_watcher("s1")
+            await mon.watchers["s1"]     # let it open, fail, and record
+            first = mon.watchers["s1"]
+            assert mon._watcher_failures["s1"] == 1
+
+            mon._ensure_watcher("s1")    # the very next sweep
+            assert mon.watchers["s1"] is first, "respawned while backing off"
+
+        assert any(r.levelno >= logging.WARNING for r in caplog.records), \
+            "a dead streamer left no record at WARNING or above"
+        assert mon.registry.states["s1"].streamer_ok is False
+
+    asyncio.run(scenario())
+
+
+def test_the_backoff_grows_and_is_cleared_by_a_recovery(monkeypatch):
+    async def scenario():
+        session = FakeSession("s1")
+        session.streamer_fails = True
+        mon, _ = build(monkeypatch, [session])
+        del mon._ensure_watcher
+        await mon.registry.discover(mon.app)
+
+        delays = []
+        for _ in range(3):
+            mon._watcher_retry_at.pop("s1", None)   # pretend the wait elapsed
+            mon._ensure_watcher("s1")
+            await mon.watchers["s1"]
+            delays.append(mon._watcher_retry_at["s1"] - time.monotonic())
+        assert delays[0] < delays[1] < delays[2], f"backoff did not grow: {delays}"
+
+        # The streamer comes back: the next open clears the penalty entirely.
+        session.streamer_fails = False
+        mon._watcher_retry_at.pop("s1", None)
+        mon._ensure_watcher("s1")
+        await asyncio.sleep(0)
+        assert "s1" not in mon._watcher_failures
+        assert "s1" not in mon._watcher_retry_at
+        assert mon.registry.states["s1"].streamer_ok is True
+        mon._drop_watcher("s1")
+
+    asyncio.run(scenario())
+
+
+def test_a_frozen_redraw_clock_is_never_read_as_a_stop(monkeypatch):
+    """The bug this whole flag exists for.
+
+    When the watcher dies nothing advances `last_event_at` again, so the clock
+    sails past IDLE_AFTER_SECONDS by itself and every later reading says the
+    agent stopped — permanently, and with no evidence behind it. The counter-
+    case matters as much: the identical session with a live streamer must still
+    report the stop, or the guard has simply disabled detection.
+    """
+    session = FakeSession("s1", lines=["$ ready", "all done"])
+    mon, _ = build(monkeypatch, [session])
+    asyncio.run(mon._sweep(0))
+    state = mon.registry.states["s1"]
+    assert state.streamer_ok is True
+
+    later = time.monotonic() + IDLE_AFTER_SECONDS + 60
+
+    state.streamer_ok = False
+    mon._conclude(state, later, changed=False)
+    assert state.previous_classification is AgentState.UNKNOWN, \
+        "a session with no working streamer was reported stopped"
+
+    state.streamer_ok = True
+    mon._conclude(state, later, changed=False)
+    assert state.previous_classification is AgentState.WAITING, \
+        "the guard suppressed a real stop"
+
+
+def test_a_session_that_vanishes_before_its_watcher_opens_backs_off(monkeypatch):
+    """`get_session_by_id` returning None is a clean return, not an exception.
+
+    It has the same consequence as a raising streamer — nothing will feed the
+    clock — so it has to count as a failure, or that path keeps the 2 Hz
+    respawn loop the backoff was added to stop.
+    """
+    async def scenario():
+        session = FakeSession("s1")
+        mon, _ = build(monkeypatch, [session])
+        del mon._ensure_watcher
+        await mon.registry.discover(mon.app)
+
+        mon.app.windows[0].tabs[0].sessions.clear()  # closed before the open
+        mon._ensure_watcher("s1")
+        await mon.watchers["s1"]
+
+        assert mon._watcher_failures["s1"] == 1
+        assert "s1" in mon._watcher_retry_at
+        assert mon.registry.states["s1"].streamer_ok is False
+
+    asyncio.run(scenario())

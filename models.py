@@ -84,6 +84,12 @@ class TerminalSnapshot:
     #: 0.0 until a second reading confirms it.
     seconds_stable: float
     previous_state: AgentState = AgentState.UNKNOWN
+    #: Whether ``seconds_since_redraw`` is actually being fed. Defaults True so
+    #: a snapshot built by hand still exercises the temporal rules; the live
+    #: path passes ``SessionState.streamer_ok``, which defaults to False until a
+    #: streamer really opens. A frozen clock looks exactly like a quiet
+    #: terminal, so the classifier has to be told which one it is looking at.
+    redraw_signal_ok: bool = True
     #: Seconds since the terminal last redrew *anything*, spinner frames
     #: included. Near zero means the pane is animating, which is a strong
     #: WORKING signal even when the meaningful text is frozen. Distinct from
@@ -136,6 +142,16 @@ class SessionState:
     #: Monotonic time of the last screen read. Drives the debounce ceiling so a
     #: continuously-animating session still gets looked at.
     last_read_at: float = 0.0
+    #: Whether this session's screen streamer is known to be alive. False until
+    #: one actually opens, and again the moment one dies. The redraw clock is
+    #: the primary signal and the streamer is the only thing that advances it,
+    #: so a dead streamer does not degrade the signal — it freezes it, and a
+    #: frozen clock crosses IDLE_AFTER_SECONDS and reports a working agent
+    #: stopped, permanently. Defaulting False means an unfed clock is never
+    #: trusted, including the case where the watcher task was created but the
+    #: event loop never got round to running it.
+    streamer_ok: bool = False
+
     #: Hash of the screen that justified the last non-UNKNOWN classification.
     #: An UNKNOWN reading holds the previous state, so without this a state
     #: outlives its own evidence indefinitely — see evidence_is_current.
@@ -221,4 +237,5 @@ class SessionState:
             seconds_stable=0.0 if self.stable_since is None else now - self.stable_since,
             previous_state=self.previous_classification,
             seconds_since_redraw=now - self.last_event_at,
+            redraw_signal_ok=self.streamer_ok,
         )

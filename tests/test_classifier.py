@@ -25,7 +25,7 @@ FIXTURE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 
 
 def snap(tail, session_id="s1", agent="claude", stable=2.0, previous=AgentState.UNKNOWN,
-         since_redraw=None):
+         since_redraw=None, redraw_signal_ok=True):
     """Build a snapshot of a *stopped* agent by default.
 
     ``since_redraw`` defaults to comfortably past ``IDLE_AFTER_SECONDS`` because
@@ -42,6 +42,7 @@ def snap(tail, session_id="s1", agent="claude", stable=2.0, previous=AgentState.
         previous_state=previous,
         seconds_since_redraw=(IDLE_AFTER_SECONDS * 2 if since_redraw is None
                               else since_redraw),
+        redraw_signal_ok=redraw_signal_ok,
     )
 
 
@@ -222,3 +223,36 @@ def test_fixture_expectations(path):
     assert result in (expected, AgentState.UNKNOWN), (
         f"{os.path.basename(path)}: expected {expected.value} (or unknown), got {result.value}"
     )
+
+
+# -- the signal has to be fed to be believed -------------------------------
+
+
+def test_a_stop_is_not_claimed_when_the_redraw_clock_is_not_being_fed():
+    """`seconds_since_redraw` is only evidence while something advances it.
+
+    A dead screen streamer freezes the clock, which then crosses the threshold
+    on its own and looks exactly like a quiet terminal. The classifier is told
+    which of the two it has, and abstains rather than inventing a stop it has no
+    observation behind. Both text branches must abstain, not just one.
+    """
+    for tail in ("all done, over to you", "Do you want to proceed? (y/n)"):
+        assert classifier.classify(snap(tail, redraw_signal_ok=False)) \
+            is AgentState.UNKNOWN, tail
+
+
+def test_a_fed_clock_still_reports_the_stop():
+    """The counter-case: the guard must not have disabled detection."""
+    assert classifier.classify(snap("all done, over to you")) is AgentState.WAITING
+    assert classifier.classify(snap("Do you want to proceed? (y/n)")) is AgentState.ACTION
+
+
+def test_an_unfed_clock_does_not_suppress_a_working_verdict():
+    """A pane that is visibly repainting needs no health flag to be believed.
+
+    The redraws themselves are the observation, so an in-window reading stands
+    on its own — the flag only gates the *absence* of them.
+    """
+    assert classifier.classify(
+        snap("streaming...", since_redraw=0.1, redraw_signal_ok=False)
+    ) is AgentState.WORKING

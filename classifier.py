@@ -107,6 +107,21 @@ def classify(snapshot: TerminalSnapshot) -> AgentState:
     if snapshot.seconds_since_redraw < IDLE_AFTER_SECONDS:
         return AgentState.WORKING
 
+    # The stop verdict rests entirely on the redraw clock, so it is worth
+    # exactly as much as the thing advancing it. A dead screen streamer freezes
+    # that clock, and a frozen clock is indistinguishable from a genuinely quiet
+    # terminal — which reported a working agent stopped, and kept reporting it,
+    # because nothing was left to move the clock back. Abstain instead: UNKNOWN
+    # holds the tab's existing colour rather than inventing a transition out of
+    # a signal nobody is feeding.
+    #
+    # This deliberately trades a false alert for a missed one, which is the
+    # worse direction by this project's own priority. It is only defensible
+    # because the failure is now loud (WARNING) and self-correcting (the watcher
+    # backs off and retries); silence here would not be.
+    if not snapshot.redraw_signal_ok:
+        return AgentState.UNKNOWN
+
     # Stopped. Everything below only decides how loudly to say so.
     tail = snapshot.tail
     if not tail.strip():

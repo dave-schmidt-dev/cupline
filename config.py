@@ -52,6 +52,12 @@ IDLE_RECHECK_SECONDS = 3.0
 #: is the requirement. Text still saying "esc to interrupt" does not overrule it.
 IDLE_AFTER_SECONDS = 5.0
 
+#: Backoff for a screen watcher that keeps dying. `_ensure_watcher` runs every
+#: sweep, so an unconditional respawn is a create-and-die loop at 2 Hz with no
+#: ceiling — invisible, and pointless once the first few attempts have failed.
+WATCHER_BACKOFF_BASE_SECONDS = 1.0
+WATCHER_BACKOFF_MAX_SECONDS = 60.0
+
 #: Lines of visible screen handed to the classifier. The screen is ~50-80 rows;
 #: the interesting part of an agent turn is nearly always the bottom.
 TAIL_LINES = 40
