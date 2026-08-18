@@ -65,6 +65,16 @@ uses, working panes were never silent longer than **0.7 s** and stopped panes
 emitted **zero** events. There is no overlap between the two, so the threshold
 (`IDLE_AFTER_SECONDS`, 5 s) is a margin rather than a tuning compromise.
 
+The rule has one precondition, and cupline checks it rather than assuming it:
+the redraw clock is only trustworthy while something is feeding it. If a pane's
+screen streamer dies, that clock freezes, and a frozen clock crosses the
+threshold on its own — reporting every agent behind it as stopped, forever.
+cupline therefore abstains on a pane whose streamer is not known to be healthy
+instead of reading silence as a stop, logs the failure at WARNING, and backs off
+its retries. The cost is deliberate and in the worse direction: an agent that
+genuinely stops behind a dead streamer holds its colour rather than going amber.
+That is only defensible because the failure is now loud.
+
 That is what makes this universal in the way the project requires: it reads
 redraw timing, not language, so it cannot accidentally learn one harness's
 phrasing. Codex and Claude Code were measured together and behave identically on
