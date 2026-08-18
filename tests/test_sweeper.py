@@ -820,9 +820,8 @@ def test_a_process_table_failure_is_not_reported_as_vanished_panes(monkeypatch, 
 
         monkeypatch.setattr(sessionlib, "refresh_process_table", exploding_refresh)
 
-        with caplog.at_level(logging.INFO, logger="cupline"):
-            with pytest.raises(OSError):
-                await mon.registry.discover(mon.app)
+        with caplog.at_level(logging.INFO, logger="cupline"), pytest.raises(OSError):
+            await mon.registry.discover(mon.app)
 
         assert not any("vanished" in r.getMessage() for r in caplog.records), \
             "a process-table failure was misreported as panes closing"
