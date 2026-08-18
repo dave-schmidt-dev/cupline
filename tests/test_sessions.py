@@ -301,7 +301,7 @@ def test_a_slow_but_successful_read_is_still_reported(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger="cupline.sessions"):
         asyncio.run(sessions.refresh_process_table(force=True))
 
-    assert "ps took" in caplog.text
+    assert "slow process-table read" in caplog.text
 
 
 def test_the_real_reader_returns_a_usable_table():

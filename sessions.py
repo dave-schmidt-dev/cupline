@@ -136,8 +136,10 @@ async def refresh_process_table(force: bool = False) -> dict[int, tuple[int, str
     _PS_CACHE, _PS_CACHE_AT = table, now
     if elapsed >= PS_SLOW_SECONDS:
         log.warning(
-            "ps took %.2fs for %d processes; the loop stayed responsive, but "
-            "this is the read that has been timing out",
+            "slow process-table read: %.2fs around the ps await for %d "
+            "processes. That span brackets an await, so it includes event-loop "
+            "scheduling delay and is an upper bound on ps itself rather than a "
+            "measurement of it; the loop stayed responsive",
             elapsed, len(table),
         )
     return table
