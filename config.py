@@ -58,11 +58,18 @@ IDLE_AFTER_SECONDS = 5.0
 WATCHER_BACKOFF_BASE_SECONDS = 1.0
 WATCHER_BACKOFF_MAX_SECONDS = 60.0
 
-#: Ceiling on one process-table read. Standalone `ps` costs ~0.04 s here even
-#: at load 137, so this is ~100x headroom — and it has still been exceeded 27
-#: times in half an hour from inside the running service. PS_SLOW_SECONDS is
-#: where a *successful* read starts being reported, so converting the read to
-#: asyncio does not silently delete the only symptom of that.
+#: Ceiling on one process-table read, and the point at which a *successful* one
+#: is still reported.
+#:
+#: What this actually measures is now known, and it is not `ps`. The span
+#: brackets an `await`, so it is read-plus-resumption; `ps` itself costs
+#: 0.11-0.14 s here even at load 154 with 2580 processes, measured both from a
+#: shell and from a fresh process using this exact asyncio path. The 1-2.5 s
+#: readings came from the daemon being descheduled: launchd gave it priority 20
+#: against 31 for interactive processes, which `ProcessType` in the plist now
+#: fixes. PS_SLOW_SECONDS is kept, and kept at WARNING, because that starvation
+#: is worth knowing about on its own — a monitor that reports an agent stopped
+#: is only as timely as its own scheduling.
 PS_TIMEOUT_SECONDS = 5.0
 PS_SLOW_SECONDS = 1.0
 

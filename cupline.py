@@ -218,6 +218,12 @@ class Cupline:
         # otherwise leave that session invisible for its entire lifetime:
         # refresh_agents only touches sessions already in the registry.
         if tick % 8 == 0:
+            # One forced read for the whole tick. Both calls below refresh the
+            # process table, and at a 2 s cache TTL against a 4 s period each
+            # would otherwise fork its own `ps` over ~2500 processes, back to
+            # back, for the same answer. Forcing once here keeps "this tick
+            # sees a fresh table" while halving the forks.
+            await sessionlib.refresh_process_table(force=True)
             await self.registry.discover(self.app)
             await self.registry.refresh_agents(self.app)
             # discover() also prunes sessions iTerm2 no longer reports, which

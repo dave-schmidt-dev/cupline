@@ -136,10 +136,9 @@ async def refresh_process_table(force: bool = False) -> dict[int, tuple[int, str
     _PS_CACHE, _PS_CACHE_AT = table, now
     if elapsed >= PS_SLOW_SECONDS:
         log.warning(
-            "slow process-table read: %.2fs around the ps await for %d "
-            "processes. That span brackets an await, so it includes event-loop "
-            "scheduling delay and is an upper bound on ps itself rather than a "
-            "measurement of it; the loop stayed responsive",
+            "%.2fs to resume after reading the process table (%d processes). "
+            "ps itself costs ~0.1s here, so this is scheduling delay, not a "
+            "slow read: alerts can lag by about this much",
             elapsed, len(table),
         )
     return table
@@ -309,13 +308,20 @@ class SessionRegistry:
     async def refresh_agents(self, app) -> None:
         """Re-resolve agent identity. Cheap: one `ps` shared across sessions.
 
+        That sentence was false for as long as this forced its own refresh.
+        The only caller runs ``discover`` immediately before, which refreshes
+        too, so the forced read re-forked over a table that was ~45 ms old --
+        confirmed in production, where 15 of 15 closely-spaced slow reads had
+        the second starting within 5-51 ms of the first finishing. The caller
+        now takes one forced read for the whole tick and both passes share it.
+
         Each session is guarded individually. iTerm2 answers
         ``SESSION_NOT_FOUND`` for a pane that closed between the enumeration
         above and the RPC below, and that used to propagate out of here and out
         of the sweep — so **one** closed pane left **every** pane unclassified
         and unpainted for that tick. Caught in production at 22:21:33.
         """
-        await refresh_process_table(force=True)
+        await refresh_process_table()
         for window in app.windows:
             for tab in window.tabs:
                 for session in tab.sessions:

@@ -799,6 +799,37 @@ def test_a_session_that_vanishes_before_its_watcher_opens_backs_off(monkeypatch)
     asyncio.run(scenario())
 
 
+def test_a_periodic_tick_reads_the_process_table_once(monkeypatch):
+    """Two passes over the panes, one `ps`.
+
+    `discover` and `refresh_agents` both refresh, and at a 2 s cache TTL
+    against a 4 s period each used to fork its own read of a ~2500-process
+    table, back to back, for the same answer. Production logs showed the pair
+    plainly: 15 of 15 closely-spaced slow reads had the second starting within
+    5-51 ms of the first finishing. Counting forks rather than asserting on the
+    call that forces them keeps this honest if the refresh moves again.
+    """
+    async def scenario():
+        mon, _ = build(monkeypatch, [FakeSession("s1"), FakeSession("s2")])
+
+        forks = 0
+
+        async def counting_ps():
+            nonlocal forks
+            forks += 1
+            return "1 0 -zsh\n"
+
+        monkeypatch.setattr(sessionlib, "_run_ps", counting_ps)
+        monkeypatch.setattr(sessionlib, "_PS_CACHE", {}, raising=False)
+        monkeypatch.setattr(sessionlib, "_PS_CACHE_AT", 0.0, raising=False)
+
+        await mon._sweep(8)          # the periodic branch: both passes run
+
+        assert forks == 1, f"the periodic tick forked ps {forks} times, not once"
+
+    asyncio.run(scenario())
+
+
 def test_a_process_table_failure_is_not_reported_as_vanished_panes(monkeypatch, caplog):
     """The refresh belongs outside the per-session guard, and this pins it there.
 

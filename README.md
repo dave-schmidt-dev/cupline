@@ -190,6 +190,16 @@ its own: cupline exits when the iTerm2 API socket goes away, so `KeepAlive` plus
 a 15 s `ThrottleInterval` means the process fails fast while iTerm2 is closed and
 is back within seconds of it reopening.
 
+It also sets `ProcessType` to `Interactive`, which is not boilerplate. Without
+that key launchd applies "light resource limits ... throttling its CPU usage and
+I/O bandwidth" (`launchd.plist(5)`), and the effect is measurable: cupline ran at
+scheduling priority 20 while interactive processes on the same machine sat at 31,
+same binary and same `nice`. Under load that delayed the event loop's resumption
+by 1-2.5 s at a stretch, which is most of the 5 s threshold the whole tool is
+built on — a monitor that tells you an agent stopped is only as timely as its own
+scheduling. It is not a CPU concession either way: cupline uses about 2.5% of one
+core.
+
 launchd requires absolute paths, so the repo ships
 `launchd/com.zerodelta.cupline.plist.template` and you generate the real plist
 for your machine. The generated file is gitignored.
