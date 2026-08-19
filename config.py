@@ -58,6 +58,28 @@ IDLE_AFTER_SECONDS = 5.0
 WATCHER_BACKOFF_BASE_SECONDS = 1.0
 WATCHER_BACKOFF_MAX_SECONDS = 60.0
 
+#: How often the connection watchdog proves the primary iTerm2 connection is
+#: still alive, and how long it waits for that proof.
+#:
+#: The library's read loop (`_async_dispatch_forever`) runs as a fire-and-forget
+#: task launchd's KeepAlive was designed to cover: when it dies without a clean
+#: close, its exception goes to asyncio's default handler, not to anything
+#: cupline awaits, and every RPC that depends on it (including reopening a dead
+#: screen watcher) hangs forever rather than raising. cupline then goes quiet
+#: without exiting, and KeepAlive never gets to run. Confirmed live: a process
+#: sat connected-looking but unresponsive for 48+ minutes after iTerm2 was
+#: quit and relaunched, until killed by hand. A cheap round-trip RPC on a timer
+#: is what catches that — it does not matter which internal task died, only
+#: whether an RPC can still complete.
+WATCHDOG_INTERVAL_SECONDS = 20.0
+WATCHDOG_TIMEOUT_SECONDS = 10.0
+
+#: Ceiling on restoring tab appearance during shutdown. Exit must be bounded
+#: even when the watchdog is the reason for it: restoring tab colour is itself
+#: an RPC, and awaiting it unconditionally on a dead connection would hang the
+#: exit path forever, defeating the watchdog it is meant to complete.
+SHUTDOWN_TIMEOUT_SECONDS = 5.0
+
 #: Ceiling on one process-table read, and the point at which a *successful* one
 #: is still reported.
 #:

@@ -36,8 +36,11 @@ from config import (
     LOG_DIR,
     LOG_FILE,
     MAX_CLASSIFY_INTERVAL_SECONDS,
+    SHUTDOWN_TIMEOUT_SECONDS,
     SWEEP_INTERVAL_SECONDS,
     TAIL_LINES,
+    WATCHDOG_INTERVAL_SECONDS,
+    WATCHDOG_TIMEOUT_SECONDS,
     WATCHER_BACKOFF_BASE_SECONDS,
     WATCHER_BACKOFF_MAX_SECONDS,
 )
@@ -413,6 +416,7 @@ class Cupline:
             asyncio.create_task(
                 sessionlib.watch_terminations(self.connection, self.on_session_gone)
             ),
+            asyncio.create_task(self._watchdog_forever()),
         ]
         try:
             await self._stop.wait()
@@ -422,10 +426,49 @@ class Cupline:
             for session_id in list(self.watchers):
                 self._drop_watcher(session_id)
             log.info("restoring tab appearance before exit")
-            await self.painter.restore_painted(self.app)
+            try:
+                await asyncio.wait_for(
+                    self.painter.restore_painted(self.app), timeout=SHUTDOWN_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                log.warning(
+                    "could not restore tab appearance within %.0fs; connection is likely dead",
+                    SHUTDOWN_TIMEOUT_SECONDS,
+                )
 
     def stop(self) -> None:
         self._stop.set()
+
+    # -- connection watchdog -------------------------------------------------
+
+    async def _watchdog_forever(self) -> None:
+        """Prove the primary connection is alive; do not just assume it.
+
+        Nothing else in this process can tell the difference between "iTerm2
+        is quiet" and "the connection died silently": a screen watcher that
+        can't reopen its streamer just backs off forever (see
+        `_note_watcher_failure`), and the per-tick RPCs in `_sweep` read
+        locally-cached state that a dead connection does not invalidate. A
+        cheap round-trip RPC on its own timer is what catches that — it does
+        not matter which internal task died, only whether an RPC still
+        completes. A failure here is fatal on purpose: exiting is what lets
+        launchd's KeepAlive reconnect against a live iTerm2 instead of leaving
+        a process that looks running but does nothing.
+        """
+        while not self._stop.is_set():
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._stop.wait(), WATCHDOG_INTERVAL_SECONDS)
+            if self._stop.is_set():
+                return
+            try:
+                await asyncio.wait_for(self.app.async_refresh(), timeout=WATCHDOG_TIMEOUT_SECONDS)
+            except Exception as exc:  # noqa: BLE001 - any failure here means the connection is dead
+                log.error(
+                    "connection watchdog: %s; exiting so launchd can restart against a live connection",
+                    exc,
+                )
+                self.stop()
+                return
 
 
 # --------------------------------------------------------------------------
