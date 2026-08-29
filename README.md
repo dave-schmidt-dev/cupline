@@ -186,9 +186,9 @@ Or drive one session directly:
 ### Run it automatically, tied to iTerm2
 
 A launchd agent keeps cupline running whenever iTerm2 is. It needs no polling of
-its own: cupline exits when the iTerm2 API socket goes away, so `KeepAlive` plus
-a 15 s `ThrottleInterval` means the process fails fast while iTerm2 is closed and
-is back within seconds of it reopening.
+its own: cupline exits when the iTerm2 API socket goes away, so `KeepAlive` on a
+loaded job plus a 15 s `ThrottleInterval` means the process fails fast while
+iTerm2 is closed and is back within seconds of it reopening.
 
 It also sets `ProcessType` to `Interactive`, which is not boilerplate. Without
 that key launchd applies "light resource limits ... throttling its CPU usage and
@@ -229,7 +229,11 @@ grep -c '__' launchd/com.zerodelta.cupline.plist          # expect: 0
 Then install and start it:
 
 ```bash
-ln -sfn "$PWD/launchd/com.zerodelta.cupline.plist" ~/Library/LaunchAgents/
+install -m 600 "$PWD/launchd/com.zerodelta.cupline.plist" \
+  ~/Library/LaunchAgents/com.zerodelta.cupline.plist.new
+mv -f ~/Library/LaunchAgents/com.zerodelta.cupline.plist.new \
+  ~/Library/LaunchAgents/com.zerodelta.cupline.plist
+launchctl bootout gui/$(id -u)/com.zerodelta.cupline 2>/dev/null || :
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.zerodelta.cupline.plist
 launchctl print gui/$(id -u)/com.zerodelta.cupline | grep -E "state|pid"
 ```
@@ -246,8 +250,8 @@ To stop it, and to stop it coming back:
 launchctl bootout gui/$(id -u)/com.zerodelta.cupline
 ```
 
-Output goes to `.logs/cupline-agent.log`. The plist lives in the project and is
-symlinked into `~/Library/LaunchAgents`, so the project stays self-contained.
+Output goes to `.logs/cupline-agent.log`. The plist is generated in the project
+and installed as a mode-600 regular file in `~/Library/LaunchAgents`.
 
 **Why not iTerm2's AutoLaunch folder?** It is the more native mechanism, but
 `$HOME/Library/Application Support/iTerm2/Scripts/AutoLaunch` scripts run under

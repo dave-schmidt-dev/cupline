@@ -26,7 +26,7 @@
   <!-- Measured, not guessed. Without this key launchd applies "light resource
        limits ... throttling its CPU usage and I/O bandwidth" (launchd.plist(5)),
        which put cupline at scheduling priority 20 while interactive processes
-       sat at 31 -- same binary, same nice 0. Under machine load that delayed
+       sat at 31; same binary, same nice 0. Under machine load that delayed
        the loop's resumption by 1-2.5s at a time, and a monitor that reports an
        agent stopped is only as timely as its own scheduling. Not a CPU
        concession: cupline uses ~2.5% of one core. -->

@@ -29,6 +29,7 @@ etc/*.local.yaml
 dist/
 build/
 *.log
+.logs/switchyard/
 
 # Working docs kept local — HISTORY/TASKS accumulate operational detail
 # (real names, amounts, dates) that must not enter git history. Both cases.
