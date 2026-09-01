@@ -851,6 +851,34 @@ def test_a_closed_pane_takes_its_acknowledgement_with_it(monkeypatch):
     assert "s1" not in mon.acked
 
 
+def test_a_hang_you_glanced_at_is_not_reported_and_that_is_the_known_cost(monkeypatch):
+    """Pinning an accepted hole, not asserting a desirable outcome.
+
+    Every other way out of an acknowledgement is the agent printing something,
+    and a hang prints nothing. Glance at a pane inside IDLE_AFTER_SECONDS of it
+    freezing and the acknowledged screen is the same screen that reads WAITING
+    five seconds later, so the stop this tool most wants to catch is the one it
+    swallows.
+
+    Deliberately left open. The obvious gate -- only acknowledge a pane already
+    reading as stopped -- closes this and undoes the rule, because the user's own
+    typing is redraw activity: the pane they just left reads WORKING at the exact
+    moment focus would record it, and is never acknowledged at all. So this test
+    exists to make a future session argue with the trade-off rather than discover
+    it. If you are here because you just fixed the hang case, check the pane the
+    user actually complained about still stays dark.
+    """
+    mon, _, _ = _stopped_and_focused(
+        monkeypatch, lines=["$ ready", "Refactoring the parser… (esc to interrupt)"])
+    asyncio.run(mon._sweep(1))
+    assert mon.registry.states["s1"].previous_classification is AgentState.WAITING, (
+        "text never overrules the redraw clock: a frozen pane is still a stop"
+    )
+    assert mon.painter.pane_applied["s1"] is AgentState.WORKING, (
+        "documented cost: the glance suppressed a hang"
+    )
+
+
 def test_a_frozen_redraw_clock_is_never_read_as_a_stop(monkeypatch):
     """The bug this whole flag exists for.
 

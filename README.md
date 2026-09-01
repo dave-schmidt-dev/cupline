@@ -116,8 +116,19 @@ screen in front of you — so colouring it amber the moment you switch tabs is
 cupline reporting a screen you just read. Focus therefore acknowledges whatever
 that pane is showing, and the acknowledgement is keyed on the screen itself
 (the same normalised hash the debounce uses), so it lasts exactly as long as the
-screen does: the agent doing anything at all voids it and the next stop alerts
+screen does: anything the agent *prints* voids it and the next stop alerts
 normally. `ACKNOWLEDGE_ON_FOCUS` turns it off.
+
+One stop prints nothing, and it is this project's own worst case: a **hang**.
+Glance at a pane inside the five seconds before it is called stopped — or have
+it freeze without printing anything after your glance — and the screen cupline
+acknowledged is the same screen it later classifies `WAITING`, so that stop is
+not reported. The obvious gate, only acknowledging a pane already reading as
+stopped, closes it and reopens the complaint the rule exists for: your own
+typing is redraw activity, so the pane you just left reads as working at the
+moment focus would record it and is never acknowledged at all. The exposure is
+narrow — any output at all before the freeze voids the acknowledgement — so the
+cost is taken rather than engineered around.
 
 Two limits on that, both deliberate. It applies to **amber only** — red means an
 agent is blocked at a control, and having looked at a permission prompt does not

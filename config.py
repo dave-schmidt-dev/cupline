@@ -164,8 +164,17 @@ HOLD_ON_UNKNOWN = True
 #: dealt with, which is the entire difference between the two colours.
 #:
 #: The acknowledgement is keyed on the normalised screen hash, so it lasts
-#: exactly as long as the screen does: the agent doing anything at all voids it
-#: and the next stop alerts normally.
+#: exactly as long as the screen does: anything the agent *prints* voids it and
+#: the next stop alerts normally.
+#:
+#: Known cost, and it lands on the worst case this tool has. A **hang** prints
+#: nothing, so a pane glanced at inside IDLE_AFTER_SECONDS of freezing — or one
+#: that freezes without printing after the glance — is acknowledged on the very
+#: screen that is about to read WAITING, and that stop goes unreported. Gating
+#: the record on the pane already reading as stopped closes the hole and undoes
+#: the rule: typing is redraw activity, so the pane you just left is WORKING at
+#: the moment focus would record it and is never acknowledged. Taken rather than
+#: engineered around, because any output before the freeze voids it.
 ACKNOWLEDGE_ON_FOCUS = True
 
 LOG_DIR = ".logs"
