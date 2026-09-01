@@ -163,9 +163,14 @@ HOLD_ON_UNKNOWN = True
 #: permission prompt does not answer it — that one keeps shouting until it is
 #: dealt with, which is the entire difference between the two colours.
 #:
-#: The acknowledgement is keyed on the normalised screen hash, so it lasts
-#: exactly as long as the screen does: anything the agent *prints* voids it and
-#: the next stop alerts normally.
+#: The acknowledgement is keyed on a screen hash that flattens animation and
+#: keeps content — ``screen.ack_hash``, not the coarser one the debounce runs
+#: on, which also flattens plain numbers and so made two different results with
+#: different counts read as one screen. It therefore lasts exactly as long as
+#: the screen does: any change to that screen voids it and the
+#: next stop alerts normally. Not only agent output — typing into the pane also
+#: changes the hash, which is the one way to void an acknowledgement that does
+#: not depend on the agent doing anything.
 #:
 #: Known cost, and it lands on the worst case this tool has. A **hang** prints
 #: nothing, so a pane glanced at inside IDLE_AFTER_SECONDS of freezing — or one
@@ -174,7 +179,8 @@ HOLD_ON_UNKNOWN = True
 #: the record on the pane already reading as stopped closes the hole and undoes
 #: the rule: typing is redraw activity, so the pane you just left is WORKING at
 #: the moment focus would record it and is never acknowledged. Taken rather than
-#: engineered around, because any output before the freeze voids it.
+#: engineered around, because any output before the freeze voids it, and so does
+#: typing into the pane.
 ACKNOWLEDGE_ON_FOCUS = True
 
 LOG_DIR = ".logs"

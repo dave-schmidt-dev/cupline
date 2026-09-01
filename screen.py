@@ -1,13 +1,17 @@
 """Screen text extraction, normalisation, and hashing.
 
-Two separate representations come out of here and they must not be confused:
+Three separate representations come out of here and they must not be confused:
 
 * the **tail** — real terminal text, handed to the classifier;
-* the **normalised** form — spinner frames and elapsed-time counters flattened,
-  used only to decide whether anything meaningful changed.
+* the **normalised** form — spinner frames, elapsed counters *and plain numbers*
+  flattened, used only to decide whether anything meaningful changed;
+* the **acknowledgement** form — the same minus the number flattening, used only
+  to decide whether a screen is the one the user already read.
 
 Hashing the raw text would make every spinner frame a "change" and the debounce
-would never settle.
+would never settle. Hashing the fully normalised text for the second question
+makes two different screens look identical, which loses an alert; see
+:func:`normalize_for_ack`.
 """
 
 from __future__ import annotations
@@ -65,6 +69,37 @@ def normalize(text: str) -> str:
 def screen_hash(text: str) -> str:
     """Stable hash of the normalised text."""
     return hashlib.sha256(normalize(text).encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def normalize_for_ack(text: str) -> str:
+    """Like :func:`normalize`, but keeps plain numbers.
+
+    Two questions look alike and are not. "Has this screen *moved*?" wants every
+    self-changing readout flattened, digits included — a token counter ticking
+    up is not progress, and leaving it in meant a settled pane never settled.
+    "Is this the same screen the user already read?" wants the opposite: a
+    number is content, and ``Done. 3 tests failed.`` is not the screen that says
+    ``Done. 5 tests failed.``
+
+    Sharing one hash between the two collapsed that distinction, so a stop whose
+    only difference from an acknowledged screen was a digit went unreported —
+    the failure this project rates worst. Spinner frames and elapsed counters
+    are still flattened here, and that half is required rather than inherited:
+    the acknowledged screen is captured while the pane is still animating, and
+    the stop it must match arrives after the animation has moved on.
+    """
+    text = text.replace(_NUL, " ")
+    text = _SPINNER_RE.sub("", text)
+    text = _ELAPSED_RE.sub("<t>", text)
+    text = _WS_RE.sub(" ", text)
+    return "\n".join(line.strip() for line in text.splitlines() if line.strip())
+
+
+def ack_hash(text: str) -> str:
+    """Stable hash for "the user has already seen this screen". See above."""
+    return hashlib.sha256(
+        normalize_for_ack(text).encode("utf-8", "replace")
+    ).hexdigest()[:16]
 
 
 #: Coarse redaction for captured fixtures. An agent's terminal shows the user's

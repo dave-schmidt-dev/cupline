@@ -95,6 +95,28 @@ _BACKGROUND_RUNNING = re.compile(r"\b\d+\s+shells?\s+still\s+running\b", re.IGNO
 #: sentence ("I waited for 3 hours") would otherwise pass as a summary line, and
 #: one sitting below the real footer would shadow it, since the scan reads
 #: backwards and stops at the first match.
+#:
+#: That rules out unbulleted prose and nothing more, which is less than it
+#: sounds. A list bullet is non-word too, so ``- Ran for 2 attempts`` and
+#: ``• Waited for 3 hours`` still pass, and so does an ordinary narration line
+#: led by the ⏺ glyph a harness puts in front of its prose. Two consequences,
+#: pointing opposite ways. Such a line *below* the footer shadows it and the
+#: suppression is lost — amber on a tab that did not need it, which is the
+#: behaviour from before this rule existed. Such a line that itself carries
+#: "N shells still running" becomes the anchor and suppresses a live alert,
+#: which is the bad direction.
+#:
+#: Left as is after measuring rather than by omission: across every captured
+#: fixture the pattern matches 8 lines and all 8 are real footers, so the
+#: false-positive rate on real screens is zero so far. Both plausible
+#: tightenings were tried on paper and make it worse. Requiring a compact
+#: duration (``5s``, ``1m 12s``) rejects the genuine
+#: ``✻ Waiting for 7 background agents to finish`` footer, and that footer
+#: legitimately shadows older ones. Excluding bullet glyphs un-shadows whatever
+#: footer sits above the bullet, and a stale "shells still running" there
+#: suppresses a live alert. Both trade a safe-direction loss for a missed
+#: alert, which this project rates worst, so the pattern stays loose on purpose.
+#: Pinned by tests in both directions rather than left to be rediscovered.
 _TURN_SUMMARY = re.compile(r"^\s*[^\w\s]\s+\w+ for \d")
 
 #: Text that *claims* the agent is mid-turn — "esc to interrupt" and friends.

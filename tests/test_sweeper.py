@@ -830,6 +830,54 @@ def test_the_acknowledgement_dies_with_the_screen_it_was_given_for(monkeypatch):
     assert "s1" not in mon.acked, "a spent acknowledgement must not linger"
 
 
+def test_a_screen_differing_only_in_digits_is_a_different_screen(monkeypatch):
+    """The regression for a hash shared between two different questions.
+
+    ``screen_hash`` flattens plain numbers so a token counter ticking up cannot
+    read as progress -- correct for the debounce, and it made
+    ``Done. 3 tests failed.`` and ``Done. 5 tests failed.`` the same screen. A
+    glance at the first therefore suppressed the second, which is a real stop
+    the user never hears about. Fails against the shared hash.
+    """
+    mon, app, session = _stopped_and_focused(
+        monkeypatch, lines=["$ ready", "Done. 3 tests failed."])
+    asyncio.run(mon._sweep(1))
+    assert mon.painter.pane_applied["s1"] is AgentState.WORKING, "the glance counts"
+
+    app.app_active = False              # user switches away
+    state = mon.registry.states["s1"]
+    session.lines = ["$ ready", "Done. 5 tests failed."]
+    state.dirty = True                  # the agent ran again and stopped again
+    asyncio.run(mon._sweep(2))
+
+    assert state.last_screen_hash == mon.registry.states["s1"].last_screen_hash
+    assert mon.painter.pane_applied["s1"] is AgentState.WAITING, (
+        "a different number is different content, and this stop is news"
+    )
+
+
+def test_the_acknowledgement_still_survives_a_moving_spinner(monkeypatch):
+    """The other half of the same choice, and why the ack hash is not the raw text.
+
+    The screen acknowledged is captured while the pane is still animating; the
+    stop it has to match arrives after the animation has moved on. Keep spinner
+    frames and elapsed counters in the ack hash and the rule never fires at all.
+    """
+    mon, app, session = _stopped_and_focused(
+        monkeypatch, lines=["$ ready", "\u280b Thinking (3s)"])
+    asyncio.run(mon._sweep(1))
+    assert mon.painter.pane_applied["s1"] is AgentState.WORKING
+
+    app.app_active = False
+    state = mon.registry.states["s1"]
+    session.lines = ["$ ready", "\u2819 Thinking (41s)"]
+    state.dirty = True
+    asyncio.run(mon._sweep(2))
+    assert mon.painter.pane_applied["s1"] is AgentState.WORKING, (
+        "animation is not content; this is the same screen the user read"
+    )
+
+
 def test_looking_at_a_control_does_not_answer_it(monkeypatch):
     """Scoped to amber on purpose.
 
@@ -854,11 +902,11 @@ def test_a_closed_pane_takes_its_acknowledgement_with_it(monkeypatch):
 def test_a_hang_you_glanced_at_is_not_reported_and_that_is_the_known_cost(monkeypatch):
     """Pinning an accepted hole, not asserting a desirable outcome.
 
-    Every other way out of an acknowledgement is the agent printing something,
-    and a hang prints nothing. Glance at a pane inside IDLE_AFTER_SECONDS of it
-    freezing and the acknowledged screen is the same screen that reads WAITING
-    five seconds later, so the stop this tool most wants to catch is the one it
-    swallows.
+    Every other way out of an acknowledgement is the screen changing, and a
+    hang with nobody typing into it changes nothing. Glance at a pane inside
+    IDLE_AFTER_SECONDS of it freezing and the acknowledged screen is the same
+    screen that reads WAITING five seconds later, so the stop this tool most
+    wants to catch is the one it swallows.
 
     Deliberately left open. The obvious gate -- only acknowledge a pane already
     reading as stopped -- closes this and undoes the rule, because the user's own

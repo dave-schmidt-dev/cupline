@@ -109,15 +109,30 @@ That is inherent to what the rule is for, and it is not worked around. Only
 shells count; `✻ Waiting for 7 background agents to finish` is the same shape
 and still goes amber.
 
+What counts as a summary line is a shape — a leading glyph, one word, a
+duration — and that shape is looser than the footers it was written for. A list
+bullet or a glyph-led narration line passes it too. Below the footer such a line
+hides it and the suppression is simply lost, which is the pre-rule behaviour;
+carrying the phrase itself, it becomes the anchor and suppresses an alert that
+was yours. Kept loose on measurement rather than principle — across every
+captured screen the pattern matches 8 lines and all 8 are real footers — because
+both ways of tightening it trade this for a missed alert instead.
+
 **A pane you were looking at is not reported again until its screen moves on.**
 The alert answers "has something happened that you do not know about", and a
 pane that held keyboard focus while iTerm2 was the frontmost application was on
 screen in front of you — so colouring it amber the moment you switch tabs is
 cupline reporting a screen you just read. Focus therefore acknowledges whatever
-that pane is showing, and the acknowledgement is keyed on the screen itself
-(the same normalised hash the debounce uses), so it lasts exactly as long as the
-screen does: anything the agent *prints* voids it and the next stop alerts
-normally. `ACKNOWLEDGE_ON_FOCUS` turns it off.
+that pane is showing, and the acknowledgement is keyed on the screen itself —
+a hash that flattens animation (spinner frames, elapsed counters) and keeps
+content, digits included — so it lasts exactly as long as the screen does: any
+change to that screen voids it and the next stop alerts normally. That is
+deliberately *not* the hash the debounce uses, which also flattens plain
+numbers: sharing one made `Done. 3 tests failed.` and `Done. 5 tests failed.`
+the same screen, so a glance at the first swallowed the second. Not only the
+agent's output — typing into the pane yourself changes the hash too, which is
+worth knowing because it is the one way to void an acknowledgement the agent
+cannot. `ACKNOWLEDGE_ON_FOCUS` turns it off.
 
 One stop prints nothing, and it is this project's own worst case: a **hang**.
 Glance at a pane inside the five seconds before it is called stopped — or have
@@ -127,8 +142,8 @@ not reported. The obvious gate, only acknowledging a pane already reading as
 stopped, closes it and reopens the complaint the rule exists for: your own
 typing is redraw activity, so the pane you just left reads as working at the
 moment focus would record it and is never acknowledged at all. The exposure is
-narrow — any output at all before the freeze voids the acknowledgement — so the
-cost is taken rather than engineered around.
+narrow — any output before the freeze voids the acknowledgement, and so does
+typing into the pane — so the cost is taken rather than engineered around.
 
 Two limits on that, both deliberate. It applies to **amber only** — red means an
 agent is blocked at a control, and having looked at a permission prompt does not

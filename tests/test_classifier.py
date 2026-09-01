@@ -204,12 +204,48 @@ def test_prose_below_the_footer_does_not_shadow_it():
     anything that passes as one below the real footer hides it. English does
     that easily -- "I waited for 3 hours" has the same word-then-duration shape
     -- which is why the leading glyph is required to be non-word.
+
+    That covers unbulleted prose only. The two tests below pin what it does not
+    cover, in both directions.
     """
     tail = (
         "\u273b Cogitated for 1m 12s \u00b7 done 3:40 PM \u00b7 2 shells still running\n"
         "  I waited for 3 hours and it never finished."
     )
     assert classifier.classify(snap(tail)) is AgentState.WORKING
+
+
+def test_a_bulleted_sentence_still_shadows_the_footer():
+    """Pinning a known gap on its safe side.
+
+    A list bullet is non-word, so ``- Ran for 2 attempts`` passes as a summary
+    line and hides the real footer under it -- agents write lines like that
+    constantly. The consequence is a *lost* suppression: amber on a tab whose
+    agent has a shell running, which is what happened before the rule existed.
+    Not closed, because every way of excluding a bullet exposes whatever older
+    footer sat above it, and a stale one there suppresses a live alert instead.
+    """
+    tail = (
+        "\u273b Cogitated for 1m 12s \u00b7 done 3:40 PM \u00b7 2 shells still running\n"
+        "- Ran for 2 attempts before giving up."
+    )
+    assert classifier.classify(snap(tail)) is AgentState.WAITING
+
+
+def test_narration_carrying_the_phrase_is_read_as_a_footer():
+    """The same gap on its dangerous side, pinned so the cost is not a surprise.
+
+    A narration line led by the glyph a harness prefixes its prose with matches
+    the summary shape, and if that line also carries the phrase it becomes the
+    anchor -- suppressing a stop that is genuinely the user's. This is the worse
+    direction, and it is accepted on measurement rather than on principle: the
+    pattern matches 8 lines across every captured fixture and all 8 are real
+    footers. Change that measurement and this trade has to be re-argued.
+    """
+    tail = "\u23fa Waiting for 2 shells still running before I can merge this."
+    assert classifier.classify(snap(tail)) is AgentState.WORKING, (
+        "known cost: prose that fits the footer shape is read as one"
+    )
 
 
 def test_background_agents_are_not_treated_as_background_shells():

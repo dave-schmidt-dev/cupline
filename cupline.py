@@ -238,14 +238,22 @@ class Cupline:
         returns to identical text alerts again. That is the safe direction: the
         cost of dropping too eagerly is an amber you have seen before, and the
         cost of keeping it is an alert that never comes.
+
+        Keyed on ``last_ack_hash`` and deliberately not on ``last_screen_hash``.
+        The latter flattens plain numbers so a token counter cannot masquerade
+        as progress, which is right for the debounce and wrong here: it makes
+        ``Done. 3 tests failed.`` and ``Done. 5 tests failed.`` the same screen,
+        so a glance at the first suppresses the second. Sharing one hash between
+        the two questions cost an alert; see ``screen.normalize_for_ack``.
         """
         vote = state.previous_classification
         sid = state.session_id
+        seen = state.last_ack_hash
         if sid == focused:
-            self.acked[sid] = state.last_screen_hash
-        elif self.acked.get(sid) != state.last_screen_hash:
+            self.acked[sid] = seen
+        elif self.acked.get(sid) != seen:
             self.acked.pop(sid, None)
-        if vote is AgentState.WAITING and self.acked.get(sid) == state.last_screen_hash:
+        if vote is AgentState.WAITING and self.acked.get(sid) == seen:
             return AgentState.WORKING
         return vote
 
@@ -406,7 +414,8 @@ class Cupline:
         lines = screenlib.lines_from_contents(contents)
         tail = screenlib.tail_text(lines, TAIL_LINES)
         digest = screenlib.screen_hash(tail)
-        changed = state.note_change(digest, tail, now)
+        changed = state.note_change(digest, tail, now,
+                                    ack_hash=screenlib.ack_hash(tail))
         state.last_read_at = now
         self._conclude(state, now, changed=changed, tail=tail)
 

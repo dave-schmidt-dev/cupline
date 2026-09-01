@@ -118,6 +118,11 @@ class SessionState:
     project: Optional[str] = None
 
     last_screen_hash: Optional[str] = None
+    #: The same screen under a coarser-by-one-rule hash: plain numbers survive
+    #: it. Kept beside last_screen_hash rather than replacing it because the two
+    #: answer different questions and gave different answers — see
+    #: ``screen.normalize_for_ack``. Only the acknowledge-on-focus rule reads it.
+    last_ack_hash: Optional[str] = None
     #: When the *normalised content* last moved. Written only by note_change.
     last_change_at: float = field(default_factory=time.monotonic)
     #: When the terminal last redrew anything at all, spinner frames included.
@@ -174,10 +179,19 @@ class SessionState:
         self.dirty = True
         self.last_event_at = now
 
-    def note_change(self, screen_hash: str, tail: str, now: float) -> bool:
-        """Record a screen reading. Returns True if the content actually moved."""
+    def note_change(self, screen_hash: str, tail: str, now: float,
+                    ack_hash: Optional[str] = None) -> bool:
+        """Record a screen reading. Returns True if the content actually moved.
+
+        ``ack_hash`` is the same screen hashed without the plain-number
+        flattening, for the acknowledge-on-focus rule alone; it takes no part in
+        the change decision. It defaults to ``screen_hash`` so a caller with no
+        interest in that rule can ignore it, which is every caller but the
+        sweeper's own read.
+        """
         changed = screen_hash != self.last_screen_hash
         self.last_screen_hash = screen_hash
+        self.last_ack_hash = screen_hash if ack_hash is None else ack_hash
         self.last_terminal_tail = tail
         if changed:
             self.last_change_at = now
