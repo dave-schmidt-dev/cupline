@@ -150,5 +150,23 @@ TITLE_SEPARATOR = " · "
 #: than clearing it. Prevents a tab flickering back to default mid-turn.
 HOLD_ON_UNKNOWN = True
 
+#: When True, a pane you were actually looking at stops being reported until
+#: something on it changes.
+#:
+#: The alert answers "has something happened that you do not know about". A pane
+#: that held keyboard focus while iTerm2 was frontmost was on screen in front of
+#: you, so whatever it was showing is not news, and colouring it the moment you
+#: switch tabs is the tool talking about a screen you just read.
+#:
+#: Scoped to WAITING and deliberately not to ACTION. Both are things you have
+#: seen, but red means an agent is blocked at a control, and having looked at a
+#: permission prompt does not answer it — that one keeps shouting until it is
+#: dealt with, which is the entire difference between the two colours.
+#:
+#: The acknowledgement is keyed on the normalised screen hash, so it lasts
+#: exactly as long as the screen does: the agent doing anything at all voids it
+#: and the next stop alerts normally.
+ACKNOWLEDGE_ON_FOCUS = True
+
 LOG_DIR = ".logs"
 LOG_FILE = "cupline.log"

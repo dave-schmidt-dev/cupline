@@ -109,6 +109,24 @@ That is inherent to what the rule is for, and it is not worked around. Only
 shells count; `✻ Waiting for 7 background agents to finish` is the same shape
 and still goes amber.
 
+**A pane you were looking at is not reported again until its screen moves on.**
+The alert answers "has something happened that you do not know about", and a
+pane that held keyboard focus while iTerm2 was the frontmost application was on
+screen in front of you — so colouring it amber the moment you switch tabs is
+cupline reporting a screen you just read. Focus therefore acknowledges whatever
+that pane is showing, and the acknowledgement is keyed on the screen itself
+(the same normalised hash the debounce uses), so it lasts exactly as long as the
+screen does: the agent doing anything at all voids it and the next stop alerts
+normally. `ACKNOWLEDGE_ON_FOCUS` turns it off.
+
+Two limits on that, both deliberate. It applies to **amber only** — red means an
+agent is blocked at a control, and having looked at a permission prompt does not
+answer it, so `ACTION` keeps shouting until it is dealt with. And it requires
+iTerm2 to be *frontmost*: the API keeps naming a current window, tab and session
+whether or not iTerm2 is in front, and that is the last pane to hold focus, not
+one anybody is reading. Without that gate, every pane you touched before
+switching to a browser would count as watched.
+
 Each session gets one `IDLE_AFTER_SECONDS` grace period from the moment cupline
 first sees it, because silence that was not watched for is not evidence of
 silence. In practice a session that was already idle at startup is reported one

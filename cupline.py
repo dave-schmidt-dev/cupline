@@ -30,6 +30,7 @@ import classifier
 import screen as screenlib
 import sessions as sessionlib
 from config import (
+    ACKNOWLEDGE_ON_FOCUS,
     DEBOUNCE_SECONDS,
     IDLE_AFTER_SECONDS,
     IDLE_RECHECK_SECONDS,
@@ -94,6 +95,10 @@ class Cupline:
         #: before which no respawn should be attempted.
         self._watcher_failures: dict[str, int] = {}
         self._watcher_retry_at: dict[str, float] = {}
+        #: session_id -> the screen hash that was up while that pane had
+        #: keyboard focus. A pane you have looked at is not news until its
+        #: screen moves on; see ``_focused_session_id`` and ACKNOWLEDGE_ON_FOCUS.
+        self.acked: dict[str, str] = {}
         self._stop = asyncio.Event()
 
     # -- session watching --------------------------------------------------
@@ -178,6 +183,7 @@ class Cupline:
         task = self.watchers.pop(session_id, None)
         self._watcher_failures.pop(session_id, None)
         self._watcher_retry_at.pop(session_id, None)
+        self.acked.pop(session_id, None)
         if task is not None:
             task.cancel()
 
@@ -196,6 +202,52 @@ class Cupline:
         self.registry.states.pop(session_id, None)
 
     # -- the sweeper -------------------------------------------------------
+
+    def _focused_session_id(self) -> Optional[str]:
+        """The pane the user is actually looking at, or None.
+
+        iTerm2 has to be the frontmost application for this to mean anything.
+        The library keeps reporting a current window, tab and session whether or
+        not iTerm2 is in front — that is the last pane to hold focus, not one
+        anybody is reading — so without the ``app_active`` gate every pane the
+        user last touched before switching to a browser would be treated as
+        watched. ``app_active`` is None until a focus notification has been
+        seen, and None is not True, so an unknown answer acknowledges nothing.
+
+        The app object keeps all of this current from focus notifications, and
+        the watchdog's ``async_refresh`` re-reads it every
+        WATCHDOG_INTERVAL_SECONDS, so a dropped notification self-corrects
+        rather than pinning the answer forever.
+        """
+        if not ACKNOWLEDGE_ON_FOCUS or self.app.app_active is not True:
+            return None
+        window = self.app.current_window
+        session = getattr(getattr(window, "current_tab", None), "current_session", None)
+        return getattr(session, "session_id", None)
+
+    def _vote_for(self, state, focused: Optional[str]) -> AgentState:
+        """That pane's classification, minus anything the user has already read.
+
+        Recording happens here rather than on a focus event because the thing
+        being acknowledged is a *screen*, not a moment: the sweep is where the
+        current screen hash is known, and re-recording it every tick is what
+        keeps a pane you are sitting on quiet as its content moves under you.
+
+        The acknowledgement is void the instant the screen differs, and the
+        entry is dropped rather than kept, so a screen that changes and later
+        returns to identical text alerts again. That is the safe direction: the
+        cost of dropping too eagerly is an amber you have seen before, and the
+        cost of keeping it is an alert that never comes.
+        """
+        vote = state.previous_classification
+        sid = state.session_id
+        if sid == focused:
+            self.acked[sid] = state.last_screen_hash
+        elif self.acked.get(sid) != state.last_screen_hash:
+            self.acked.pop(sid, None)
+        if vote is AgentState.WAITING and self.acked.get(sid) == state.last_screen_hash:
+            return AgentState.WORKING
+        return vote
 
     async def sweep_forever(self) -> None:
         """Single timer for all sessions. Debounce lives here and nowhere else."""
@@ -237,6 +289,7 @@ class Cupline:
 
         tab_votes: dict[str, list[tuple[str, AgentState, Optional[str], bool]]] = {}
         tabs_by_id = {t.tab_id: t for w in self.app.windows for t in w.tabs}
+        focused = self._focused_session_id()
 
         for state in self.registry.agent_sessions():
             self._ensure_watcher(state.session_id)
@@ -251,7 +304,7 @@ class Cupline:
 
             if state.has_been_read():
                 tab_votes.setdefault(state.tab_id, []).append(
-                    (state.session_id, state.previous_classification,
+                    (state.session_id, self._vote_for(state, focused),
                      state.project, state.evidence_is_current())
                 )
 

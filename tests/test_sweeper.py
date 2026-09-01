@@ -113,14 +113,28 @@ class FakeTab:
 
 
 class FakeWindow:
-    def __init__(self, window_id, tabs):
+    def __init__(self, window_id, tabs, current=0):
         self.window_id = window_id
         self.tabs = tabs
+        self.current = current
+
+    @property
+    def current_tab(self):
+        return self.tabs[self.current] if self.tabs else None
 
 
 class FakeApp:
     def __init__(self, windows):
         self.windows = windows
+        #: Mirrors ``iterm2.App``: whether iTerm2 is the frontmost application.
+        #: False by default, which is the "nobody is looking" case — so a test
+        #: that says nothing about focus acknowledges nothing, and the focus
+        #: rule has to be opted into explicitly.
+        self.app_active = False
+
+    @property
+    def current_window(self):
+        return self.windows[0] if self.windows else None
 
     def get_session_by_id(self, session_id):
         for w in self.windows:
@@ -745,6 +759,96 @@ def test_the_backoff_grows_and_is_cleared_by_a_recovery(monkeypatch):
         mon._drop_watcher("s1")
 
     asyncio.run(scenario())
+
+
+def _stopped_and_focused(monkeypatch, lines=("$ ready", "all done")):
+    """One agent pane, stopped, with iTerm2 in front and that pane focused."""
+    session = FakeSession("s1", lines=list(lines))
+    mon, app = build(monkeypatch, [session])
+    asyncio.run(mon._sweep(0))          # baseline reading
+    _go_quiet(mon.registry.states["s1"])
+    app.app_active = True               # s1 is the tab's active pane by default
+    return mon, app, session
+
+
+def test_a_pane_you_are_looking_at_is_not_reported(monkeypatch):
+    """The alert answers "something happened you do not know about".
+
+    A pane holding keyboard focus while iTerm2 is frontmost is on screen in
+    front of the user, so amber on it the moment they switch tabs is the tool
+    reporting a screen they just read.
+    """
+    mon, _, _ = _stopped_and_focused(monkeypatch)
+    asyncio.run(mon._sweep(1))
+    assert mon.registry.states["s1"].previous_classification is AgentState.WAITING, (
+        "the classifier's own verdict must be untouched; only the report changes"
+    )
+    assert mon.painter.pane_applied["s1"] is AgentState.WORKING
+    assert mon.painter.applied["t0"] is AgentState.WORKING
+
+
+def test_nothing_is_acknowledged_while_iterm2_is_in_the_background(monkeypatch):
+    """The counter-case, and the reason the app-active gate exists.
+
+    The library goes on reporting a current window, tab and session when iTerm2
+    is not in front -- that is the last pane to hold focus, not one anybody is
+    reading. Without this gate every pane the user touched before switching to a
+    browser would be treated as watched, which is the whole alert.
+    """
+    mon, app, _ = _stopped_and_focused(monkeypatch)
+    app.app_active = False
+    asyncio.run(mon._sweep(1))
+    assert mon.painter.pane_applied["s1"] is AgentState.WAITING
+
+
+def test_an_unknown_focus_state_acknowledges_nothing(monkeypatch):
+    """``app_active`` is None until a focus notification has been seen."""
+    mon, app, _ = _stopped_and_focused(monkeypatch)
+    app.app_active = None
+    asyncio.run(mon._sweep(1))
+    assert mon.painter.pane_applied["s1"] is AgentState.WAITING
+
+
+def test_the_acknowledgement_dies_with_the_screen_it_was_given_for(monkeypatch):
+    """Look at a pane, leave, and the *next* stop must still alert.
+
+    This is what keeps the rule from being an off switch. The acknowledgement is
+    keyed on the screen hash, so anything the agent does voids it -- the user
+    acknowledged a screen, not a session.
+    """
+    mon, app, session = _stopped_and_focused(monkeypatch)
+    asyncio.run(mon._sweep(1))
+    assert mon.painter.pane_applied["s1"] is AgentState.WORKING
+
+    app.app_active = False              # user switches to another application
+    state = mon.registry.states["s1"]
+    session.lines = ["$ ready", "all done", "and here is something new"]
+    state.dirty = True                  # the agent worked, then stopped again
+    asyncio.run(mon._sweep(2))
+
+    assert mon.painter.pane_applied["s1"] is AgentState.WAITING
+    assert "s1" not in mon.acked, "a spent acknowledgement must not linger"
+
+
+def test_looking_at_a_control_does_not_answer_it(monkeypatch):
+    """Scoped to amber on purpose.
+
+    Red means an agent is blocked at a control. Having seen the prompt is not
+    the same as having answered it, and a blocked agent that stops asking is the
+    worst failure this tool has -- so ACTION is never acknowledged.
+    """
+    mon, _, _ = _stopped_and_focused(
+        monkeypatch, lines=["$ ready", "Proceed with this change? (y/n)"])
+    asyncio.run(mon._sweep(1))
+    assert mon.painter.pane_applied["s1"] is AgentState.ACTION
+
+
+def test_a_closed_pane_takes_its_acknowledgement_with_it(monkeypatch):
+    mon, _, _ = _stopped_and_focused(monkeypatch)
+    asyncio.run(mon._sweep(1))
+    assert "s1" in mon.acked
+    asyncio.run(mon.on_session_gone("s1"))
+    assert "s1" not in mon.acked
 
 
 def test_a_frozen_redraw_clock_is_never_read_as_a_stop(monkeypatch):
