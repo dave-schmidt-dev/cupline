@@ -197,6 +197,21 @@ def test_the_shells_phrase_off_a_summary_line_suppresses_nothing():
     assert classifier.classify(snap(tail)) is AgentState.WAITING
 
 
+def test_prose_below_the_footer_does_not_shadow_it():
+    """Only a glyph-led line is a summary line.
+
+    The scan reads backwards and stops at the first summary line it finds, so
+    anything that passes as one below the real footer hides it. English does
+    that easily -- "I waited for 3 hours" has the same word-then-duration shape
+    -- which is why the leading glyph is required to be non-word.
+    """
+    tail = (
+        "\u273b Cogitated for 1m 12s \u00b7 done 3:40 PM \u00b7 2 shells still running\n"
+        "  I waited for 3 hours and it never finished."
+    )
+    assert classifier.classify(snap(tail)) is AgentState.WORKING
+
+
 def test_background_agents_are_not_treated_as_background_shells():
     """Scoped to shells on purpose.
 

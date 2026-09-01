@@ -90,8 +90,12 @@ _BACKGROUND_RUNNING = re.compile(r"\b\d+\s+shells?\s+still\s+running\b", re.IGNO
 #: The one-line footer an agent writes when a turn ends, e.g.
 #: ``✻ Cogitated for 1m 12s · done 3:40 PM · 2 shells still running``.
 #: Matched on shape alone — a leading glyph, one word, a duration — because the
-#: word itself is picked at random by the harness and the glyph varies.
-_TURN_SUMMARY = re.compile(r"^\s*\S\s+\w+ for \d")
+#: word itself is picked at random by the harness and the glyph varies. The
+#: glyph class is non-word rather than "any character" on purpose: an ordinary
+#: sentence ("I waited for 3 hours") would otherwise pass as a summary line, and
+#: one sitting below the real footer would shadow it, since the scan reads
+#: backwards and stops at the first match.
+_TURN_SUMMARY = re.compile(r"^\s*[^\w\s]\s+\w+ for \d")
 
 #: Text that *claims* the agent is mid-turn — "esc to interrupt" and friends.
 #:
