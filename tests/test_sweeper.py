@@ -841,16 +841,20 @@ def test_a_screen_differing_only_in_digits_is_a_different_screen(monkeypatch):
     """
     mon, app, session = _stopped_and_focused(
         monkeypatch, lines=["$ ready", "Done. 3 tests failed."])
+    state = mon.registry.states["s1"]
     asyncio.run(mon._sweep(1))
     assert mon.painter.pane_applied["s1"] is AgentState.WORKING, "the glance counts"
+    seen_hash = state.last_screen_hash
 
     app.app_active = False              # user switches away
-    state = mon.registry.states["s1"]
     session.lines = ["$ ready", "Done. 5 tests failed."]
     state.dirty = True                  # the agent ran again and stopped again
     asyncio.run(mon._sweep(2))
 
-    assert state.last_screen_hash == mon.registry.states["s1"].last_screen_hash
+    assert state.last_screen_hash == seen_hash, (
+        "premise: the debounce hash cannot tell these two screens apart, which "
+        "is what made sharing it with the acknowledgement lose an alert"
+    )
     assert mon.painter.pane_applied["s1"] is AgentState.WAITING, (
         "a different number is different content, and this stop is news"
     )
