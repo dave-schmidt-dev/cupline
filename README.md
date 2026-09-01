@@ -38,7 +38,7 @@ iTerm2 3.6.11 across Claude Code and Codex.
 
 | State | Colour | Tab title | Meaning |
 |---|---|---|---|
-| `WORKING` | default | iTerm2's automatic name | The terminal is still repainting; the agent is doing something. |
+| `WORKING` | default | iTerm2's automatic name | The terminal is still repainting, *or* the agent stopped with a background shell that will re-enter it. Either way, not yours. |
 | `WAITING` | amber | `<project> · your turn` | **Stopped.** Finished, errored, rate-limited, hung — the reason is not claimed. |
 | `ACTION` | red | `<project> · needs you` | Stopped, *and* an input control is on screen, so it needs a decision. |
 | `UNKNOWN` | holds previous, then releases | holds previous | Stopped, but the screen is unreadable. Rare. |
@@ -87,6 +87,27 @@ decision". Getting that refinement wrong costs you a colour, not the signal.
 A consequence worth stating plainly: an agent frozen mid-turn still displays
 "esc to interrupt", and cupline reports it as stopped anyway. The screen is the
 evidence; leftover words claiming otherwise are not.
+
+**One text rule goes further and withdraws the report.** An agent whose turn
+ended with a background shell still running — Claude Code's `✻ Cogitated for
+1m 12s · done 3:40 PM · 2 shells still running` — has stopped, and has not
+stopped in the sense worth a colour: the shell exiting re-enters the agent with
+no human involved. The tab stays default. This is the only text allowed to
+outrank the redraw clock, and it is allowed because redraw silence cannot
+contradict it: a background shell paints nothing by design, so the footer is not
+competing with the screen, it is the only evidence there is. "esc to interrupt"
+*is* contradicted by a still screen, which is why that one is still refused.
+
+The match is read off the **last** turn-summary line on screen, not searched for
+anywhere in the tail. These footers stay in the transcript, so a shell that
+exited three turns ago would otherwise suppress an alert on a session that has
+been waiting on you since. Reading only the newest one also makes it
+self-clearing: when the shell exits, the turn that follows writes a summary line
+without it. The residual cost is a shell that never exits — a hung `ssh`, a
+forgotten `tail -f` — which suppresses that pane's alert for as long as it hangs.
+That is inherent to what the rule is for, and it is not worked around. Only
+shells count; `✻ Waiting for 7 background agents to finish` is the same shape
+and still goes amber.
 
 Each session gets one `IDLE_AFTER_SECONDS` grace period from the moment cupline
 first sees it, because silence that was not watched for is not evidence of

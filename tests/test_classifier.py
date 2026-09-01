@@ -132,6 +132,83 @@ def test_text_claiming_to_be_busy_does_not_override_a_stopped_screen(tail):
     assert classifier.classify(snap(tail, since_redraw=0.1)) is AgentState.WORKING
 
 
+@pytest.mark.parametrize("tail", [
+    "\u273b Cogitated for 1m 12s \u00b7 done 3:40 PM \u00b7 2 shells still running",
+    "\u273b Crunched for 18s \u00b7 1 shell still running",
+])
+def test_a_turn_that_ended_with_background_shells_is_not_flagged(tail):
+    """Stopped, but not the user's problem.
+
+    The redraw clock is right — nothing is repainting — and the tab still must
+    not go amber: the shell exiting re-enters the agent with no human involved,
+    so there is nothing here to act on. Amber on a session that was never yours
+    is how the colour stops meaning anything.
+    """
+    assert classifier.classify(snap(tail)) is AgentState.WORKING
+
+
+def test_background_shells_do_not_suppress_a_control():
+    """A prompt is still a prompt with work running behind it.
+
+    Background shells say "the agent will resume on its own". They say nothing
+    about the permission dialog on screen, which resumes on nobody but David.
+    """
+    tail = (
+        "\u273b Cogitated for 1m 12s \u00b7 done 3:40 PM \u00b7 2 shells still running\n"
+        "Proceed with this change? (y/n)"
+    )
+    assert classifier.classify(snap(tail)) is AgentState.ACTION
+
+
+def test_a_stale_background_shell_footer_does_not_suppress():
+    """The anchor, which is the entire safety argument for this rule.
+
+    Taken from a real captured screen: the footer sits several turns up in the
+    transcript, the user has replied since, and the agent is now genuinely
+    waiting on them. A bare substring search would suppress that alert on the
+    strength of a shell that exited minutes ago -- and unlike the ACTION/WAITING
+    refinement, getting this wrong costs the alert, not the colour.
+    """
+    tail = (
+        "\u273b Crunched for 5s \u00b7 1 shell still running\n"
+        "\n"
+        "\u23fa Another stale poll. No action; still waiting on you.\n"
+        "\n"
+        "\u273b Cogitated for 2s\n"
+        "\n"
+        "\u276f what about me\n"
+        "\n"
+        "\u23fa Two things are yours, and neither needs work from you.\n"
+        "\n"
+        "\u273b Cooked for 11s"
+    )
+    assert classifier.classify(snap(tail)) is AgentState.WAITING
+
+
+def test_the_shells_phrase_off_a_summary_line_suppresses_nothing():
+    """Only the turn footer counts, because only it is dated by the turn.
+
+    An agent quoting the phrase -- reading a log, or editing this very file --
+    renders it in ordinary output. Requiring the summary shape is what keeps
+    RESEARCH.md finding 14's displayed-content problem from reaching a rule
+    whose failure is a missed alert rather than a wrong colour.
+    """
+    tail = "\u23fa The footer reads '2 shells still running' when this happens."
+    assert classifier.classify(snap(tail)) is AgentState.WAITING
+
+
+def test_background_agents_are_not_treated_as_background_shells():
+    """Scoped to shells on purpose.
+
+    "Waiting for 7 background agents to finish" is the same summary shape and a
+    different claim, and it was observed on a screen labelled WAITING. Widening
+    the pattern to any background work is a change to how much alerting is given
+    up, so it is not made by accident here.
+    """
+    tail = "\u273b Waiting for 7 background agents to finish"
+    assert classifier.classify(snap(tail)) is AgentState.WAITING
+
+
 def test_override_takes_precedence():
     classifier.set_override("s1", AgentState.WAITING)
     assert classifier.classify(snap("Proceed? (y/n)", session_id="s1")) is AgentState.WAITING
