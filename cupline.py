@@ -64,7 +64,7 @@ def setup_logging(debug: bool) -> None:
     file_handler = logging.handlers.RotatingFileHandler(
         os.path.join(LOG_DIR, LOG_FILE), maxBytes=2_000_000, backupCount=3
     )
-    file_handler.setLevel(logging.DEBUG if debug else logging.WARNING)
+    file_handler.setLevel(logging.DEBUG if debug else logging.INFO)
     file_handler.setFormatter(
         logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
     )
@@ -734,7 +734,12 @@ def main() -> None:
         log.info("watching. ctrl-c to stop; tab colour is restored on exit.")
         await monitor.run()
 
-    iterm2.run_until_complete(entry, retry=False)
+    try:
+        iterm2.Connection().run_until_complete(entry, retry=False)
+    except ConnectionRefusedError:
+        # iTerm2 being closed is an expected launchd lifecycle state. Give the
+        # exit guard a code it can acknowledge without masking real failures.
+        raise SystemExit(os.EX_TEMPFAIL) from None
 
 
 if __name__ == "__main__":

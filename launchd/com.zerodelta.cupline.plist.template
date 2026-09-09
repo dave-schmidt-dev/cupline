@@ -15,9 +15,11 @@
   <key>WorkingDirectory</key>
   <string>__CUPLINE_DIR__</string>
 
-  <!-- cupline exits when the iTerm2 API socket goes away, which is what makes
-       this a lifetime tie rather than a poll: launchd restarts it, it fails
-       fast while iTerm2 is closed, and it stays up once iTerm2 is back. -->
+  <!-- Initial API refusal exits EX_TEMPFAIL (75). KeepAlive deliberately makes
+       launchd the retry owner: 30 measured failed starts averaged 0.222s wall
+       and 0.204 CPU-seconds, or 0.14% of one core at the observed 593/day. The
+       library alternative actively checks iTerm2 through AppleScript about
+       twice per second and measured 6.7% of one core while iTerm2 was closed. -->
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
@@ -33,15 +35,16 @@
   <key>ProcessType</key>
   <string>Interactive</string>
 
-  <!-- Retry spacing while iTerm2 is closed. Low enough that cupline is running
-       within seconds of iTerm2 opening, high enough that a closed iTerm2 costs
-       nothing measurable. -->
+  <!-- retry=False is intentional. The same launchd loop also owns restarts
+       after a connected API session dies, after Cupline's finally block has
+       attempted to restore every painted tab. This interval bounds both the
+       expected initial retry and unexpected failure loops. -->
   <key>ThrottleInterval</key>
   <integer>15</integer>
 
   <key>StandardOutPath</key>
-  <string>__CUPLINE_DIR__/.logs/cupline-agent.log</string>
+  <string>/dev/null</string>
   <key>StandardErrorPath</key>
-  <string>__CUPLINE_DIR__/.logs/cupline-agent.log</string>
+  <string>/dev/null</string>
 </dict>
 </plist>

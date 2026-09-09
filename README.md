@@ -228,7 +228,7 @@ To run tests, pytest is included in `requirements.txt`.
 ```
 
 Prints one line per state change to stdout. The rotating file log
-(`.logs/cupline.log`) records WARNING and above by default; `--debug` drops it to
+(`.logs/cupline.log`) records INFO and above by default; `--debug` drops it to
 DEBUG, which is what you want when inspecting session targeting. `--tail` dumps
 the captured terminal text for every change.
 
@@ -250,10 +250,20 @@ Or drive one session directly:
 
 ### Run it automatically, tied to iTerm2
 
-A launchd agent keeps cupline running whenever iTerm2 is. It needs no polling of
-its own: cupline exits when the iTerm2 API socket goes away, so `KeepAlive` on a
-loaded job plus a 15 s `ThrottleInterval` means the process fails fast while
-iTerm2 is closed and is back within seconds of it reopening.
+A launchd agent keeps cupline lifetime-bound to iTerm2. Cupline uses
+`Connection.run_until_complete(..., retry=False)`, so `KeepAlive` plus a 15 s
+`ThrottleInterval` owns the initial connection retry. An unavailable iTerm2 API
+socket exits with `EX_TEMPFAIL` (75), distinct from unexpected exit 1 failures.
+
+That choice is measured. Thirty controlled refused-socket starts averaged
+0.222 s wall and 0.204 CPU-seconds: 131 wall-seconds and 121 CPU-seconds/day, or
+0.14% of one core, at the observed 593 starts/day. The library's `retry=True`
+path instead checks iTerm2 through AppleScript about twice per second and used
+6.7% of one core during a 15-second unavailable-socket run.
+
+After a connected iTerm2 session ends, Cupline enters the same `finally` block,
+attempts to restore painted tab state, and exits. launchd then owns that restart
+too. One retry mechanism therefore covers both sides of the process lifetime.
 
 It also sets `ProcessType` to `Interactive`, which is not boilerplate. Without
 that key launchd applies "light resource limits ... throttling its CPU usage and
@@ -306,8 +316,11 @@ launchctl print gui/$(id -u)/com.zerodelta.cupline | grep -E "state|pid"
 `state = running` with a pid is the only success signal. A plist naming an
 interpreter that does not exist reports `state = spawn scheduled`, no pid, and
 `last exit code = 78: EX_CONFIG` — verified by bootstrapping one deliberately.
-For any other startup failure the process runs and then dies, so read
-`.logs/cupline-agent.log`, which is where launchd sends stdout and stderr.
+An initial iTerm2 connection refusal reports `last exit code = 75: EX_TEMPFAIL`.
+Other startup failures remain non-zero and are not covered by that expected-state
+acknowledgement. Cupline's own lifecycle and handled runtime records are in the
+rotating `.logs/cupline.log`; the launchd template sends raw stdout and stderr
+to `/dev/null`.
 
 To stop it, and to stop it coming back:
 
@@ -315,8 +328,13 @@ To stop it, and to stop it coming back:
 launchctl bootout gui/$(id -u)/com.zerodelta.cupline
 ```
 
-Output goes to `.logs/cupline-agent.log`. The plist is generated in the project
-and installed as a mode-600 regular file in `~/Library/LaunchAgents`.
+Output goes to the rotating file at `.logs/cupline.log`; this template sends
+launchd stdout and stderr to `/dev/null`. The plist is generated in the project
+and installed as a mode-600 regular file in `~/Library/LaunchAgents`. The trade
+is explicit: an import-time or otherwise uncaught stderr-only traceback is not
+retained, but its non-zero launchd exit status still alerts; only the expected
+75 status is acknowledged. Cupline's handled runtime failures are retained by
+the rotating application logger.
 
 **Why not iTerm2's AutoLaunch folder?** It is the more native mechanism, but
 `$HOME/Library/Application Support/iTerm2/Scripts/AutoLaunch` scripts run under
