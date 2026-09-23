@@ -1,0 +1,35 @@
+# Pre-commit asserts lint (ruff), dead code (vulture), and no iterm2 imports in models/classifier.
+# Pre-push asserts the full pytest test suite via uv.
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.7
+    hooks:
+      - id: ruff-check
+        stages: [pre-commit]
+
+  - repo: https://github.com/jendrikseipp/vulture
+    rev: v2.16
+    hooks:
+      - id: vulture
+        language_version: python3.14
+        stages: [pre-commit]
+        args: [., --exclude, "tests,.venv", --min-confidence, "60"]
+
+  - repo: local
+    hooks:
+      - id: classifier-no-iterm2
+        name: classifier-no-iterm2
+        language: pygrep
+        entry: '^\s*(import iterm2|from iterm2)'
+        files: ^(models|classifier)\.py$
+        stages: [pre-commit]
+      - id: pytest
+        name: pytest
+        language: system
+        entry: uv run --no-project --python 3.14 --with-requirements requirements.txt python -m pytest tests/ -q
+        pass_filenames: false
+        always_run: true
+        require_serial: true
+        stages: [pre-push]

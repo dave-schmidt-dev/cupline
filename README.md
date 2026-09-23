@@ -380,6 +380,8 @@ gitignored and the corpus stays local. **Review by hand before sharing any fixtu
 .venv/bin/python -m pytest tests/ -q
 ```
 
+Running `pre-commit install` installs both stages: pre-commit runs ruff, Vulture, and the iterm2 import-boundary check; pre-push runs the full pytest suite through uv.
+
 ## Conventions
 
 - All files self-contained under this directory.
