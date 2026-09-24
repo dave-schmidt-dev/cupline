@@ -1,4 +1,4 @@
-# Pre-commit asserts lint (ruff), dead code (vulture), and no iterm2 imports in models/classifier.
+# Pre-commit asserts lint (ruff), dead code (vulture), file size, and no iterm2 imports in models/classifier.
 # Pre-push asserts the full pytest test suite via uv.
 default_install_hook_types: [pre-commit, pre-push]
 
@@ -24,6 +24,12 @@ repos:
         language: pygrep
         entry: '^\s*(import iterm2|from iterm2)'
         files: ^(models|classifier)\.py$
+        stages: [pre-commit]
+      - id: file-size
+        name: file-size (500-line limit)
+        language: system
+        entry: python3 scripts/check_file_size.py
+        files: ^(.*\.py|\.file-size-exceptions)$
         stages: [pre-commit]
       - id: pytest
         name: pytest

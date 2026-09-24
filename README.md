@@ -19,7 +19,10 @@ iTerm2 3.6.11 across Claude Code and Codex.
 |---|---|
 | `README.md` | This file. Setup and run instructions. |
 | `RESEARCH.md` | What was verified against iTerm2 3.6.11, and what failed. |
-| `cupline.py` | Entry point. Wires monitors, sweeper, and paint loop. |
+| `cupline.py` | Entry point: argument parsing, logging setup, and dispatch. |
+| `monitor.py` | The `Cupline` monitor: sweeper, run loop, and connection watchdog. |
+| `watchers.py` | Per-session screen watchers and session lifecycle events, mixed into `Cupline`. |
+| `commands.py` | One-shot CLI commands (`--list`, `--reset`, `--set`, `--demo`, `--capture`). |
 | `models.py` | `AgentState`, `TerminalSnapshot`, `SessionState`. No iTerm2 imports. |
 | `sessions.py` | Session discovery, create/terminate monitors, agent identification. |
 | `screen.py` | Screen streaming, text normalization, hashing, tail extraction. |
@@ -381,6 +384,8 @@ gitignored and the corpus stays local. **Review by hand before sharing any fixtu
 ```
 
 Running `pre-commit install` installs both stages: pre-commit runs ruff, Vulture, and the iterm2 import-boundary check; pre-push runs the full pytest suite through uv.
+
+Pre-commit also runs `scripts/check_file_size.py`, which fails any Python file over 500 lines unless `.file-size-exceptions` lists it with a line cap and a written reason.
 
 ## Conventions
 
