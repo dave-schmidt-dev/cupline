@@ -26,7 +26,7 @@ repos:
         files: ^(models|classifier)\.py$
         stages: [pre-commit]
       - id: file-size
-        name: file-size (500-line limit)
+        name: file-size (500-line target, 800-line ceiling)
         language: system
         entry: python3 scripts/check_file_size.py
         files: ^(.*\.py|\.file-size-exceptions)$

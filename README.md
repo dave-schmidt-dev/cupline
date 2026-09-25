@@ -385,7 +385,7 @@ gitignored and the corpus stays local. **Review by hand before sharing any fixtu
 
 Running `pre-commit install` installs both stages: pre-commit runs ruff, Vulture, and the iterm2 import-boundary check; pre-push runs the full pytest suite through uv.
 
-Pre-commit also runs `scripts/check_file_size.py`, which fails any Python file over 500 lines unless `.file-size-exceptions` lists it with a line cap and a written reason.
+Pre-commit also runs `scripts/check_file_size.py`, which warns about a Python file over 500 lines. It fails a file over 800 lines unless `.file-size-exceptions` lists that file with a written reason.
 
 ## Conventions
 
