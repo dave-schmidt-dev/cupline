@@ -108,8 +108,8 @@ Scrollback **is** available, contrary to the initial assumption that only the
 visible screen could be read. Line numbers are **absolute** and keep increasing
 as content scrolls off, so the base is `overflow + scrollback_buffer_height`,
 not 0. Live reading: `overflow=11051, scrollback_buffer_height=1000,
-mutable_area_height=73`. Implemented as `screen.fetch_scrollback()` and verified,
-though the main loop does not need it.
+mutable_area_height=73`. Verified with a `fetch_scrollback()` helper, since removed as unused
+(the main loop does not need scrollback).
 
 ### OSC 6 injection — works, but not needed
 

@@ -146,11 +146,6 @@ class TabPainter:
             if STATE_COLORS.get(state) is not None and sid in self.pane_tab
         }
 
-    @property
-    def painted(self) -> set[str]:
-        """Tabs this process has coloured and has not yet cleared."""
-        return self.colored
-
     @staticmethod
     async def _read_prior(session) -> _PriorAppearance:
         """Read a pane's existing tab colour, before anything is pushed to it."""

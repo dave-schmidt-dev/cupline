@@ -39,8 +39,9 @@ _WS_RE = re.compile(r"[ \t]+")
 def lines_from_contents(contents) -> list[str]:
     """Extract visible screen lines from an iTerm2 ``ScreenContents``.
 
-    ``ScreenContents`` covers the visible screen only. Scrollback is reachable,
-    but through a different call — see :func:`fetch_scrollback`.
+    ``ScreenContents`` covers the visible screen only. Scrollback is reachable
+    through ``async_get_line_info`` + ``async_get_contents`` (RESEARCH.md,
+    "Scrollback"); nothing in the main loop needs it.
     """
     out = []
     for i in range(contents.number_of_lines):
@@ -122,21 +123,3 @@ def redact(text: str) -> str:
     text = _URL_RE.sub("<url>", text)
     text = _HOME_RE.sub("~", text)
     return _LONG_TOKEN_RE.sub("<redacted>", text)
-
-
-async def fetch_scrollback(session, lines_above: int = 40) -> list[str]:
-    """Read ``lines_above`` lines from above the visible screen.
-
-    Not used by the main loop — the visible screen is what carries an agent's
-    current state — but verified working and kept for the classifier, which may
-    want context when a full-screen TUI leaves nothing useful on screen.
-
-    Line numbers here are **absolute** and keep counting as content scrolls off,
-    so the base is ``overflow + scrollback_buffer_height``, not 0. Measured on a
-    live session: overflow 11051, scrollback 1000, visible 73.
-    """
-    info = await session.async_get_line_info()
-    base = info.overflow + info.scrollback_buffer_height
-    start = max(info.overflow, base - lines_above)
-    contents = await session.async_get_contents(start, base - start)
-    return [line.string.replace(_NUL, " ").rstrip() for line in contents]

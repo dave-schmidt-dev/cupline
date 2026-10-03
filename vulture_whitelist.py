@@ -1,11 +1,8 @@
-# 2026-09-23 baseline.
-# Records findings rather than reviewing them.
+# Vulture whitelist: each entry names the only caller that keeps it alive.
 # New entries need a one-line justification.
 
-set_override  # unused function (classifier.py:136)
-clear_overrides  # unused function (classifier.py:144)
-seconds_since_change  # unused variable (models.py:82)
-seconds_stable  # unused variable (models.py:85)
-previous_state  # unused variable (models.py:86)
-fetch_scrollback  # unused function (screen.py:127)
-_.painted  # unused property (tab_state.py:149)
+set_override  # test-only seam into classifier._OVERRIDES: tests/test_classifier.py
+clear_overrides  # test-only seam into classifier._OVERRIDES: tests/test_classifier.py
+seconds_since_change  # Snapshot field, built in models.py:250, asserted in tests/test_models.py
+seconds_stable  # Snapshot field, built in models.py:251, asserted in tests/test_models.py
+previous_state  # Snapshot field, built in models.py:252, asserted in tests/test_models.py
