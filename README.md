@@ -396,3 +396,43 @@ Pre-commit also runs `scripts/check_file_size.py`, which warns about a Python fi
 - Tests verify real behavior — no smoke-only "did it run" checks.
 - `models.py` and `classifier.py` must not import `iterm2`. That boundary is what makes the classifier swappable and the tests runnable without a terminal.
 - Classification never branches on which agent produced the text — redraw timing and text shape are harness-agnostic.
+
+## Versioning
+
+No project version is currently declared. There is no package manifest and no
+`VERSION` file, and there are no release tags, so nothing here is versioned yet.
+Cupline is documented as working at the current commit; that status is a
+description of behaviour, not a version, and it is unchanged by this section.
+No manifest or `VERSION` file is fabricated to carry a version.
+
+This section states the policy a future prepared release will follow. It does
+not declare, tag, or imply any release today, and none of the numbers below
+describe current functionality.
+
+Where a prepared release is made, it follows
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html) while the version
+stays in the `0.y.z` range:
+
+- **Minor** (`0.y.0`) increments cover new features and backward-incompatible
+  changes to the documented operator contract.
+- **Patch** (`0.y.z`) increments cover backward-compatible fixes only.
+
+The documented operator contract those rules govern is:
+
+- **CLI** — the entry point `cupline.py` and the commands and options documented
+  under "Workflows": `--list`, `--set <session-id>=<state>`, `--demo`,
+  `--capture`, `--reset`, `--debug`, and `--tail`.
+- **Configuration** — the knobs documented here and in `config.py`, including
+  `IDLE_AFTER_SECONDS`, `ACKNOWLEDGE_ON_FOCUS`, the tab colours, and the agent
+  command patterns.
+- **Terminal-attention behaviour** — the `WORKING`, `WAITING`, `ACTION`, and
+  `UNKNOWN` states and their tab colour, title, and split-pane behaviour as
+  documented under "What you see".
+
+Two milestones are defined for that future release:
+
+- **`0.1.0`** — the first prepared, functional milestone.
+- **`1.0.0`** — the point at which the contract above is treated as stable.
+
+Until such a release is prepared, the project remains unversioned and this
+policy is the only forward commitment.
