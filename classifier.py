@@ -35,8 +35,9 @@ import re
 from config import IDLE_AFTER_SECONDS
 from models import AgentState, TerminalSnapshot
 
-#: Manual overrides keyed by session id. Populated by ``--set`` and ``--demo``
-#: so tab states can be exercised end-to-end without any classifier at all.
+#: Manual overrides keyed by session id, set through ``set_override``. Only the
+#: tests populate it; ``--set`` and ``--demo`` paint tabs directly and never
+#: consult the classifier.
 _OVERRIDES: dict[str, AgentState] = {}
 
 #: Generic "a human must answer this" shapes. Harness-independent by design.

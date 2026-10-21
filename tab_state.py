@@ -212,7 +212,7 @@ class TabPainter:
         if word is None:
             return None
         if not project:
-            return word
+            return f"{word} +{others}" if others > 0 else word
         name = f"{project} +{others}" if others > 0 else project
         return f"{name}{TITLE_SEPARATOR}{word}"
 

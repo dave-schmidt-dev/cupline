@@ -141,6 +141,11 @@ def test_title_falls_back_to_the_word_without_a_project():
     assert TabPainter.title_for(AgentState.ACTION, None) == "needs you"
 
 
+def test_title_keeps_the_count_without_a_project():
+    """Two projectless panes stopping together must not read as one."""
+    assert TabPainter.title_for(AgentState.WAITING, None, others=1) == "your turn +1"
+
+
 def test_states_needing_nothing_have_no_title():
     """No title means iTerm2's automatic name — usually the agent's task."""
     assert TabPainter.title_for(AgentState.WORKING, "cupline") is None
