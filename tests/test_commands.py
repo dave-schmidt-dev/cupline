@@ -2,8 +2,9 @@
 
 import asyncio
 
-import commands
-from sweeper_fakes import FakeApp, FakeSession, FakeTab, FakeWindow
+from sweeper_fakes import FakeApp, FakeSession, FakeTab, FakeWindow  # puts the repo root on sys.path
+
+import commands  # noqa: E402
 
 
 class _NoRegistry:
