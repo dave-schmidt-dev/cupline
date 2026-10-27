@@ -13,7 +13,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import iterm2  # noqa: E402
 
 from models import AgentState, PaneVerdict  # noqa: E402
-from tab_state import TabPainter, _PriorAppearance, _carries_state_colour  # noqa: E402
+from tab_colors import PriorAppearance, carries_state_colour  # noqa: E402
+from tab_state import TabPainter  # noqa: E402
 from tab_state_fakes import FakeApp, FakeProfile, FakeSession, FakeTab, colors_of  # noqa: E402
 
 
@@ -141,7 +142,7 @@ def test_restore_painted_recovers_a_pane_that_moved_to_a_different_tab():
 
 
 # -- a colour cupline did not set is not cupline's to remove ---------------
-# `_profile_for(None)` switched all three `use_tab_color` flags off, and
+# `profile_for(None)` switched all three `use_tab_color` flags off, and
 # `_wanted` produces a state for *every* session in any tab holding an agent —
 # including panes cupline does not watch. So a pane the user had coloured by
 # hand was silently un-coloured on the first sweep and never given it back.
@@ -353,13 +354,13 @@ def test_an_unreadable_pane_is_not_recorded_as_clean(caplog):
     (iterm2.Color(9, 9, 9), False),
 ])
 def test_only_the_palette_reads_as_cuplines_own(color, ours):
-    prior = _PriorAppearance(use=True, use_dark=False, use_light=False, color=color)
-    assert _carries_state_colour(prior) is ours
+    prior = PriorAppearance(use=True, use_dark=False, use_light=False, color=color)
+    assert carries_state_colour(prior) is ours
 
 
 def test_a_disabled_slot_does_not_count_even_if_it_holds_amber():
     """iTerm2 keeps the stored value after a clear; only an enabled slot shows."""
     amber = iterm2.Color(230, 150, 30)
-    prior = _PriorAppearance(use=False, use_dark=False, use_light=False,
+    prior = PriorAppearance(use=False, use_dark=False, use_light=False,
                              color=amber, color_dark=amber, color_light=amber)
-    assert _carries_state_colour(prior) is False
+    assert carries_state_colour(prior) is False

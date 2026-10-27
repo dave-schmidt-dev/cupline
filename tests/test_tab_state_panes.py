@@ -317,7 +317,7 @@ def test_a_backgrounded_pane_does_not_hold_an_aggregate_it_never_earned():
 
 
 # -- a colour cupline did not set is not cupline's to remove ---------------
-# `_profile_for(None)` switched all three `use_tab_color` flags off, and
+# `profile_for(None)` switched all three `use_tab_color` flags off, and
 # `_wanted` produces a state for *every* session in any tab holding an agent —
 # including panes cupline does not watch. So a pane the user had coloured by
 # hand was silently un-coloured on the first sweep and never given it back.

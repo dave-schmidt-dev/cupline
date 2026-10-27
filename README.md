@@ -28,6 +28,7 @@ iTerm2 3.6.11 across Claude Code and Codex.
 | `screen.py` | Screen streaming, text normalization, hashing, tail extraction. |
 | `classifier.py` | `classify(snapshot) -> AgentState`. Redraw timing decides; text only refines. |
 | `tab_state.py` | Per-tab aggregation and tab-color paint/restore. |
+| `tab_colors.py` | Tab-colour profile writes, prior-appearance capture, and recognising cupline's own palette. |
 | `config.py` | Debounce interval, colors, agent command patterns. |
 | `tests/` | pytest suite (no iTerm2 required). |
 | `launchd/*.plist.template` | launchd plist for automatic startup. See "Run it automatically" below. |

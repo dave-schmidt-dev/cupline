@@ -11,7 +11,7 @@ threshold: 3
 rationale: The classifier must preserve the documented working/attention decision and avoid inventing a stop from an unreadable screen.
 
 ### INV-2 — Tab state changes preserve ownership and restoration across panes
-area: ["tab_state.py", "watchers.py", "sessions.py"]
+area: ["tab_state.py", "tab_colors.py", "watchers.py", "sessions.py"]
 gate_test: tests/test_tab_state_restore.py
 threshold: 3
 rationale: A session-attention change must not clobber unrelated pane or tab state and must restore owned changes correctly.

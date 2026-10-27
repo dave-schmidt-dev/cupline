@@ -13,7 +13,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import STATE_COLORS  # noqa: E402
 from models import AgentState  # noqa: E402
-from tab_state import TabPainter, _profile_for  # noqa: E402
+from tab_colors import profile_for  # noqa: E402
+from tab_state import TabPainter  # noqa: E402
 from tab_state_fakes import FakeApp, FakeSession, FakeTab  # noqa: E402
 
 
@@ -213,7 +214,7 @@ def test_a_failing_title_does_not_fail_the_paint():
 
 def test_profile_sets_light_and_dark_variants():
     """Profiles with separate light/dark colours ignore the plain setter alone."""
-    keys = set(_profile_for((1, 2, 3)).values.keys())
+    keys = set(profile_for((1, 2, 3)).values.keys())
     assert {"Tab Color", "Tab Color (Dark)", "Tab Color (Light)"} <= keys
     assert {"Use Tab Color", "Use Tab Color (Dark)", "Use Tab Color (Light)"} <= keys
 
