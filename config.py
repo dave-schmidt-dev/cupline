@@ -99,6 +99,17 @@ PS_SLOW_SECONDS = 1.0
 #: the interesting part of an agent turn is nearly always the bottom.
 TAIL_LINES = 40
 
+#: How far up from the bottom of a stopped screen, in non-blank lines, an input
+#: control may sit and still be taken as live. An agent blocked on a control
+#: has it at the bottom, followed only by its own options and key hints; a
+#: control higher up with the agent's own output below it is one the agent
+#: *displayed* (a log excerpt, a quoted transcript, docs about a prompt) and is
+#: not blocked on. The margin is set from the corpus: the one live control on
+#: file sits 15 non-blank lines up, its five options and their descriptions
+#: included, so 24 covers a taller menu without reaching up into the output
+#: above it.
+LIVE_CONTROL_LINES = 24
+
 #: Commands treated as interactive AI agents. Matched against the session's
 #: process ancestry, not just the foreground job — see sessions.resolve_agent.
 #:

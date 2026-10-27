@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import re
 
-from config import IDLE_AFTER_SECONDS
+from config import IDLE_AFTER_SECONDS, LIVE_CONTROL_LINES
 from models import AgentState, TerminalSnapshot
 
 #: Manual overrides keyed by session id, set through ``set_override``. Only the
@@ -146,6 +146,34 @@ def clear_overrides() -> None:
     _OVERRIDES.clear()
 
 
+def _control_is_live(tail: str) -> bool:
+    """True when an input control is on screen *and the agent is blocked on it*.
+
+    The shapes in ``_ACTION_PATTERNS`` cannot tell a control from text about
+    one: an agent that prints a log excerpt, a transcript diff or docs for a
+    prompt renders the same ``❯ 1.`` or ``(y/n)`` without waiting on it, and
+    cupline once painted its own terminal red for a diagnostic that echoed a
+    captured menu line (RESEARCH.md finding 14). What separates the two is
+    position, not shape. A live control is the last thing the agent drew:
+    below it there is nothing but its own options and key hints. A displayed
+    one has the agent's output below it, and that output ends the way every
+    turn ends, with a summary footer, before the harness returns to its idle
+    prompt.
+
+    So a control counts only when it sits within ``LIVE_CONTROL_LINES`` of the
+    bottom and no turn footer (``_TURN_SUMMARY``) lies below it. Both halves
+    are measured against the corpus rather than argued: the live control on
+    file is 15 non-blank lines up with no footer under it, and the displayed
+    one built from it is inside the window but under a footer.
+    """
+    lines = [line for line in tail.splitlines() if line.strip()]
+    zone = lines[-LIVE_CONTROL_LINES:]
+    for index in range(len(zone) - 1, -1, -1):
+        if any(pattern.search(zone[index]) for pattern in _ACTION_PATTERNS):
+            return not any(_TURN_SUMMARY.search(below) for below in zone[index + 1:])
+    return False
+
+
 def _background_work_running(tail: str) -> bool:
     """True when the agent's *most recent* turn ended with shells still running.
 
@@ -210,13 +238,13 @@ def classify(snapshot: TerminalSnapshot) -> AgentState:
         # than inventing a reason for a screen that cannot be read.
         return AgentState.UNKNOWN
 
-    # Only a control counts. Question-shaped prose (_PROSE_PATTERNS) is
+    # Only a live control counts. Question-shaped prose (_PROSE_PATTERNS) is
     # deliberately not consulted here: an agent that ends its turn by asking
     # something has finished, and colouring that red spends the alarm on a
-    # session that needs nothing urgent.
-    for pattern in _ACTION_PATTERNS:
-        if pattern.search(tail):
-            return AgentState.ACTION
+    # session that needs nothing urgent. Nor is a control the agent merely
+    # displayed, which is what the position check in `_control_is_live` is for.
+    if _control_is_live(tail):
+        return AgentState.ACTION
 
     # Stopped, and nothing on screen needs a decision — but "stopped" is not
     # the same as "yours". An agent whose turn ended with a background shell

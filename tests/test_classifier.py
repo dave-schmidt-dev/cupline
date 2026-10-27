@@ -260,6 +260,77 @@ def test_background_agents_are_not_treated_as_background_shells():
     assert classifier.classify(snap(tail)) is AgentState.WAITING
 
 
+# -- a control the agent is showing you is not a control it is blocked on ----
+
+
+_LIVE_MENU = (
+    "What should the dispatch target?\n"
+    "\n"
+    "❯ 1. Throwaway project in the guest\n"
+    "     Generates a minimal app and dispatches a real task against it. Proves\n"
+    "     the full chain without touching any of your repos.\n"
+    "  2. The real repo\n"
+    "     Stronger evidence, but a provider editing that repo.\n"
+    "  3. Type something.\n"
+    "\n"
+    "Enter to select · ↑/↓ to navigate · Esc to cancel"
+)
+
+_IDLE_PROMPT = (
+    "────────────\n"
+    "❯\n"
+    "────────────\n"
+    "  ctx: 72k/1000k (7%) | 5h: 51% 2h30m\n"
+    "  ~/Documents/Projects/example | <url>"
+)
+
+
+def test_a_live_control_at_the_bottom_is_action():
+    """The real shape, options and key hints included, with nothing under it."""
+    assert classifier.classify(snap(_LIVE_MENU)) is AgentState.ACTION
+
+
+def test_a_control_quoted_in_the_agents_output_is_not_action():
+    """RESEARCH.md finding 14: cupline painted its own terminal red.
+
+    A diagnostic echoed a captured ``❯ 1.`` line into a Bash output block.
+    The agent then narrated, wrote its turn footer, and returned to its idle
+    prompt -- it was never blocked on the menu it displayed. The control sits
+    well inside the bottom window here, so the footer below it is what has to
+    carry the decision.
+    """
+    tail = (
+        "⏺ Bash(sed -n '36,40p' captured.txt)\n"
+        "  ⎿  What should the dispatch target?\n"
+        "     ❯ 1. Throwaway project in the guest\n"
+        "       2. The real repo\n"
+        "\n"
+        "⏺ That is the line the pattern matched; the menu was answered long ago.\n"
+        "\n"
+        "✻ Cogitated for 6s\n"
+        "\n" + _IDLE_PROMPT
+    )
+    assert classifier.classify(snap(tail)) is AgentState.WAITING
+
+
+def test_a_control_buried_under_a_screen_of_output_is_not_action():
+    """Position alone, for a harness that writes no footer.
+
+    A ``(y/n)`` quoted from a log with thirty lines of the agent's own output
+    under it is not the last thing the agent drew, so it is not live.
+    """
+    tail = "Proceed with the rollout? (y/n)\n" + "\n".join(
+        f"  line {n} of the agent's own output after the quote" for n in range(30)
+    )
+    assert classifier.classify(snap(tail)) is AgentState.WAITING
+
+
+def test_a_control_after_the_footer_is_still_live():
+    """The footer rule reads below the control only, never above it."""
+    tail = "✻ Cogitated for 6s\n\n" + _LIVE_MENU
+    assert classifier.classify(snap(tail)) is AgentState.ACTION
+
+
 def test_override_takes_precedence():
     classifier.set_override("s1", AgentState.WAITING)
     assert classifier.classify(snap("Proceed? (y/n)", session_id="s1")) is AgentState.WAITING
