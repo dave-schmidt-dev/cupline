@@ -64,6 +64,75 @@ class _PriorAppearance(NamedTuple):
 #: unreadable profile is no basis for claiming otherwise.
 _PRIOR_OFF = _PriorAppearance(False, False, False)
 
+#: Display P3 -> linear sRGB, both D65. iTerm2 hands colours back in P3 even
+#: when they were pushed as sRGB (RESEARCH.md: an sRGB red read back as
+#: ``(255,0,0,P3)``), so a colour of cupline's own is only recognisable after
+#: converting it back.
+_P3_TO_SRGB = (
+    (1.2249401, -0.2249404, 0.0),
+    (-0.0420569, 1.0420571, 0.0),
+    (-0.0196376, -0.0786361, 1.0982735),
+)
+
+#: Per-channel slack when deciding a colour is one of ``STATE_COLORS``. The
+#: round trip through iTerm2 lands within a couple of counts of the value
+#: pushed (observed: amber ``(230,150,30)`` came back as P3 ``(219,154,61)``,
+#: which converts to ``(230,150,28)`` with the matrix above). The palette's
+#: entries are far further apart than this, and a hand-set colour inside the
+#: band is indistinguishable from cupline's on screen anyway.
+_COLOR_TOLERANCE = 6
+
+
+def _decode(component: float) -> float:
+    value = component / 255.0
+    return value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+
+
+def _encode(linear: float) -> int:
+    linear = min(1.0, max(0.0, linear))
+    value = (
+        12.92 * linear if linear <= 0.0031308 else 1.055 * linear ** (1 / 2.4) - 0.055
+    )
+    return round(value * 255)
+
+
+def _to_srgb(color) -> Optional[tuple[int, int, int]]:
+    """A profile colour's 8-bit sRGB components, or None if it has none."""
+    try:
+        rgb = (float(color.red), float(color.green), float(color.blue))
+    except AttributeError, TypeError, ValueError:
+        return None
+    if getattr(color, "color_space", None) is iterm2.ColorSpace.P3:
+        linear = tuple(_decode(c) for c in rgb)
+        return tuple(
+            _encode(sum(row[i] * linear[i] for i in range(3))) for row in _P3_TO_SRGB
+        )
+    return tuple(round(c) for c in rgb)
+
+
+def _carries_state_colour(prior: _PriorAppearance) -> bool:
+    """True if any *enabled* slot holds a colour from cupline's own palette.
+
+    Each slot is judged on its own: the stranded pane found live had only the
+    dark slot switched on, which ``_profile_for`` never writes, so requiring
+    all three would have missed the one real example there is.
+    """
+    slots = (
+        (prior.use, prior.color),
+        (prior.use_dark, prior.color_dark),
+        (prior.use_light, prior.color_light),
+    )
+    for enabled, color in slots:
+        if not enabled:
+            continue
+        rgb = _to_srgb(color)
+        if rgb is None:
+            continue
+        for ours in STATE_COLORS.values():
+            if all(abs(a - b) <= _COLOR_TOLERANCE for a, b in zip(rgb, ours)):
+                return True
+    return False
+
 
 def _restore_profile(prior: _PriorAppearance) -> iterm2.LocalWriteOnlyProfile:
     """Put back exactly what a pane had before cupline first painted it."""
@@ -148,41 +217,68 @@ class TabPainter:
 
     @staticmethod
     async def _read_prior(session) -> _PriorAppearance:
-        """Read a pane's existing tab colour, before anything is pushed to it."""
-        try:
-            profile = await session.async_get_profile()
-            return _PriorAppearance(
-                use=bool(profile.use_tab_color),
-                use_dark=bool(profile.use_tab_color_dark),
-                use_light=bool(profile.use_tab_color_light),
-                color=profile.tab_color,
-                color_dark=profile.tab_color_dark,
-                color_light=profile.tab_color_light,
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "could not read prior tab colour for %s (%s); "
-                "assuming it had none", session.session_id, exc,
-            )
-            return _PRIOR_OFF
+        """Read a pane's existing tab colour, before anything is pushed to it.
+
+        Raises whatever the profile read raises; each caller decides what an
+        unreadable profile means for its own path.
+        """
+        profile = await session.async_get_profile()
+        return _PriorAppearance(
+            use=bool(profile.use_tab_color),
+            use_dark=bool(profile.use_tab_color_dark),
+            use_light=bool(profile.use_tab_color_light),
+            color=profile.tab_color,
+            color_dark=profile.tab_color_dark,
+            color_light=profile.tab_color_light,
+        )
 
     async def _paint(self, session, color: Optional[tuple[int, int, int]]) -> bool:
         """Push one pane's colour. False means deliberately left untouched.
 
         Capturing happens here, immediately before the first push to a pane, so
         every path that paints also records what it painted over.
+
+        A clear on a pane with no recorded prior is not refused outright. It
+        used to be, which kept a hand-set colour safe but also meant a colour
+        left behind by a SIGKILLed cupline (``pane_prior`` dies with the
+        process) could never be undone by its successor: the pane sat amber
+        for good while this process recorded it as clean. So the pane is read
+        first, and only a colour that is not cupline's own is left alone. An
+        unreadable profile raises, so the caller records nothing and the pane
+        is looked at again next sweep instead of being written off as clean.
         """
         sid = session.session_id
         if color is None and sid not in self.pane_prior:
-            # Nothing of ours to undo. Pushing a clear anyway is precisely what
-            # destroyed a hand-set colour on a pane cupline does not even watch:
-            # `_wanted` produces a state for every session in any tab holding an
-            # agent, and a clear switched `use_tab_color` off unconditionally.
-            return False
+            if not _carries_state_colour(await self._read_prior(session)):
+                # Nothing of ours to undo. Pushing a clear anyway is precisely
+                # what destroyed a hand-set colour on a pane cupline does not
+                # even watch: `_wanted` produces a state for every session in
+                # any tab holding an agent, and a clear switched
+                # `use_tab_color` off unconditionally.
+                return False
+            log.warning(
+                "session %s carries a tab colour from cupline's own palette that "
+                "this process never painted; clearing it as left behind by an "
+                "earlier process that was killed before it could restore",
+                sid,
+            )
+            # What the pane had before that earlier process painted it is
+            # unknowable now. No colour is the common case and the only
+            # defensible guess; it is what `--reset` assumes too.
+            self.pane_prior[sid] = _PRIOR_OFF
         if sid not in self.pane_prior:
-            self.pane_prior[sid] = await self._read_prior(session)
+            try:
+                self.pane_prior[sid] = await self._read_prior(session)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "could not read prior tab colour for %s (%s); assuming it had none",
+                    sid,
+                    exc,
+                )
+                self.pane_prior[sid] = _PRIOR_OFF
         await session.async_set_profile_properties(
-            _restore_profile(self.pane_prior[sid]) if color is None
+            _restore_profile(self.pane_prior[sid])
+            if color is None
             else _profile_for(color)
         )
         return True
@@ -251,8 +347,11 @@ class TabPainter:
                 # Unwatched or never-read: no claim, so no colour.
                 wanted[sid] = AgentState.WORKING
                 continue
-            if (verdict.state is AgentState.UNKNOWN and HOLD_ON_UNKNOWN
-                    and verdict.evidence_current):
+            if (
+                verdict.state is AgentState.UNKNOWN
+                and HOLD_ON_UNKNOWN
+                and verdict.evidence_current
+            ):
                 # Hold this pane's OWN last reading, not what was last painted on
                 # it. Those differ for the active pane, which carries the tab
                 # aggregate: holding `pane_applied` there resurrected a colour the
@@ -293,8 +392,12 @@ class TabPainter:
         # active pane is not carrying the tab's colour. Returning early here
         # dropped the tab bar to grey while an agent was still waiting — the
         # alert disappearing at the exact moment the user looked at the window.
-        if (state is AgentState.UNKNOWN and HOLD_ON_UNKNOWN and hold
-                and tab.tab_id in self.colored):
+        if (
+            state is AgentState.UNKNOWN
+            and HOLD_ON_UNKNOWN
+            and hold
+            and tab.tab_id in self.colored
+        ):
             state = self.applied.get(tab.tab_id, state)
         title = self.title_for(state, project, others)
         wanted = self._wanted(tab, state, per_pane)
@@ -304,7 +407,9 @@ class TabPainter:
         # converge. Only entries claiming *this* tab are dropped, so a pane that
         # moved to another tab is left for that tab's own sweep to re-record.
         live = {session.session_id for session in tab.sessions}
-        stale = [s for s, t in self.pane_tab.items() if t == tab.tab_id and s not in live]
+        stale = [
+            s for s, t in self.pane_tab.items() if t == tab.tab_id and s not in live
+        ]
         for sid in stale:
             self.pane_applied.pop(sid, None)
             self.pane_tab.pop(sid, None)
@@ -315,8 +420,11 @@ class TabPainter:
         # sits still every time focus moves between panes — both of which have to
         # repaint, or the tab bar keeps a colour the newly-active pane never
         # earned.
-        if not force and self.titled.get(tab.tab_id) == title and all(
-                self.pane_applied.get(sid) is want for sid, want in wanted.items()):
+        if (
+            not force
+            and self.titled.get(tab.tab_id) == title
+            and all(self.pane_applied.get(sid) is want for sid, want in wanted.items())
+        ):
             return False
 
         pushed = 0
@@ -335,9 +443,11 @@ class TabPainter:
             try:
                 await self._paint(session, STATE_COLORS.get(want))
                 # Recorded even when `_paint` declined to touch the pane: the
-                # bookkeeping is "this pane carries no colour of ours", which is
-                # true either way, and it keeps the dedupe from re-deciding the
-                # same thing every sweep.
+                # bookkeeping is "this pane carries no colour of ours", and
+                # `_paint` only declines after reading the pane and finding
+                # exactly that (an unreadable pane raises instead, so nothing
+                # is recorded and it is retried). Recording it keeps the dedupe
+                # from re-reading the same pane every sweep.
                 self.pane_applied[sid] = want
                 self.pane_tab[sid] = tab.tab_id
                 pushed += 1
@@ -367,7 +477,9 @@ class TabPainter:
         # or the shutdown restore genuinely clears it.
         log.info(
             "tab %s -> %s (%d panes: %s)%s",
-            tab.tab_id, state.value, pushed,
+            tab.tab_id,
+            state.value,
+            pushed,
             ", ".join(sorted(want.value for want in wanted.values())),
             f" title={title!r}" if title else "",
         )

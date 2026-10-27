@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import sessions as sessionlib  # noqa: E402
 from config import IDLE_AFTER_SECONDS  # noqa: E402
 from cupline import Cupline  # noqa: E402
+from tab_state_fakes import FakeProfile  # noqa: E402
 
 
 class FakeLine:
@@ -41,6 +42,10 @@ class FakeSession:
         #: called mid-await, to simulate a screen event landing during the fetch
         self.during_fetch = None
         self.pushes = []
+        #: What the pane's tab colour looked like before cupline saw it. The
+        #: painter reads it before any clear or paint; a pane with no colour is
+        #: the ordinary case.
+        self.profile = FakeProfile()
 
     async def async_get_variable(self, name):
         if self.vanish:
@@ -58,6 +63,9 @@ class FakeSession:
         if self.fail:
             raise RuntimeError("session went away mid-fetch")
         return FakeContents(self.lines)
+
+    async def async_get_profile(self):
+        return self.profile
 
     async def async_set_profile_properties(self, profile):
         self.pushes.append(profile)

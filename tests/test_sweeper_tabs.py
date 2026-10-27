@@ -8,6 +8,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import iterm2  # noqa: E402
+
 from models import AgentState  # noqa: E402
 from sweeper_fakes import FakeSession, _go_quiet, build  # noqa: E402
 
@@ -190,3 +192,26 @@ def test_the_backoff_grows_and_is_cleared_by_a_recovery(monkeypatch):
     asyncio.run(scenario())
 
 
+
+
+def test_a_colour_stranded_by_a_killed_predecessor_is_cleared_on_the_first_sweep(
+        monkeypatch, caplog):
+    """Through the sweeper: a fresh process meets amber it has no record of.
+
+    `pane_prior` dies with the process, so after a SIGKILL restart the
+    successor's first sweep used to refuse the clear ("nothing of ours to
+    undo") and record the pane as clean, leaving the colour there for good.
+    """
+    busy = FakeSession("s1", lines=["$ ready", "still going"])
+    busy.profile.use_tab_color_dark = True
+    busy.profile.tab_color_dark = iterm2.Color(
+        219, 154, 61, color_space=iterm2.ColorSpace.P3)
+    mon, app = build(monkeypatch, [busy])
+
+    with caplog.at_level(logging.WARNING, logger="cupline"):
+        asyncio.run(mon._sweep(0))
+
+    assert len(busy.pushes) == 1, "the stranded colour survived the first sweep"
+    assert mon.painter.pane_applied["s1"] is AgentState.WORKING
+    assert any("s1" in r.getMessage() for r in caplog.records)
+    assert app.windows[0].tabs[0].tab_id not in mon.painter.colored

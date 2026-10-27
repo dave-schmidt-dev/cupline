@@ -2,15 +2,18 @@
 
 from asyncio import run
 import json
+import logging
 import os
 import sys
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import iterm2  # noqa: E402
 
 from models import AgentState, PaneVerdict  # noqa: E402
-from tab_state import TabPainter  # noqa: E402
+from tab_state import TabPainter, _PriorAppearance, _carries_state_colour  # noqa: E402
 from tab_state_fakes import FakeApp, FakeProfile, FakeSession, FakeTab, colors_of  # noqa: E402
 
 
@@ -258,3 +261,105 @@ def test_reset_all_is_still_deliberately_unconditional():
 
     assert _last_push(tab.sessions[0])["Use Tab Color"] is False
 
+
+
+# -- a colour a *dead* cupline left behind is cupline's to remove ------------
+# `pane_prior` lives in the process. SIGKILL it (launchctl kickstart -k does)
+# and the successor starts with no record of what the predecessor painted, so
+# the "no prior, nothing of ours to undo" refusal above stranded that colour
+# for good — and recorded the pane as clean. Seen live on 2026-09-01 as an
+# amber title bar on an unwatched split with the dark slot only, in P3.
+
+
+def _stranded_profile():
+    """The live example: dark slot only, amber as iTerm2 hands it back (P3)."""
+    profile = FakeProfile()
+    profile.use_tab_color_dark = True
+    profile.tab_color_dark = iterm2.Color(219, 154, 61, color_space=iterm2.ColorSpace.P3)
+    return profile
+
+
+def test_a_colour_left_by_a_killed_process_is_cleared_by_its_successor(caplog):
+    tab = FakeTab("t1", pane_count=2, active="t1-p0")
+    stranded = tab.sessions[1]
+    stranded.profile = _stranded_profile()
+    painter = TabPainter()  # fresh process: no pane_prior at all
+
+    with caplog.at_level(logging.WARNING, logger="cupline.tab"):
+        run(painter.apply(tab, AgentState.WORKING, per_pane={
+            "t1-p0": PaneVerdict(AgentState.WORKING, True),
+            # t1-p1 is unwatched, exactly like the live pane.
+        }))
+
+    assert len(stranded.pushes) == 1, "the stranded colour was never cleared"
+    cleared = _last_push(stranded)
+    assert cleared["Use Tab Color"] is False
+    assert cleared["Use Tab Color (Dark)"] is False
+    assert cleared["Use Tab Color (Light)"] is False
+    assert painter.pane_applied["t1-p1"] is AgentState.WORKING
+    assert any("t1-p1" in r.getMessage() and r.levelno == logging.WARNING
+               for r in caplog.records), "the clear was not visible in the log"
+
+
+def test_a_hand_set_colour_is_still_refused_a_clear_after_a_restart(caplog):
+    """Task 7's protection must survive: only cupline's own palette is cleared."""
+    tab = FakeTab("t1", pane_count=2, active="t1-p0")
+    stranger = tab.sessions[1]
+    stranger.profile = FakeProfile(
+        use=True, color=iterm2.Color(40, 90, 200, color_space=iterm2.ColorSpace.P3))
+    painter = TabPainter()
+
+    with caplog.at_level(logging.WARNING, logger="cupline.tab"):
+        run(painter.apply(tab, AgentState.WORKING, per_pane={
+            "t1-p0": PaneVerdict(AgentState.WORKING, True),
+        }))
+
+    assert stranger.pushes == [], "a hand-set colour was cleared"
+    assert painter.pane_applied["t1-p1"] is AgentState.WORKING, (
+        "a pane read and found clean is recorded so it is not re-read every sweep"
+    )
+    assert not caplog.records
+
+
+def test_an_unreadable_pane_is_not_recorded_as_clean(caplog):
+    """Declining to clear what cannot be read is fine; calling it clean is not."""
+    tab = FakeTab("t1", pane_count=2, active="t1-p0")
+    opaque = tab.sessions[1]
+    reads = []
+
+    async def broken():
+        reads.append(1)
+        raise RuntimeError("profile unavailable")
+
+    opaque.async_get_profile = broken
+    painter = TabPainter()
+    verdicts = {"t1-p0": PaneVerdict(AgentState.WORKING, True)}
+
+    with caplog.at_level(logging.WARNING, logger="cupline.tab"):
+        run(painter.apply(tab, AgentState.WORKING, per_pane=verdicts))
+    assert "t1-p1" not in painter.pane_applied, "an unread pane was recorded as clean"
+    assert opaque.pushes == []
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+    run(painter.apply(tab, AgentState.WORKING, per_pane=verdicts))
+    assert len(reads) == 2, "the unreadable pane was written off instead of retried"
+
+
+@pytest.mark.parametrize("color, ours", [
+    (iterm2.Color(219, 154, 61, color_space=iterm2.ColorSpace.P3), True),   # amber, live
+    (iterm2.Color(230, 150, 30), True),                                      # amber, sRGB
+    (iterm2.Color(200, 40, 40), True),                                       # red, sRGB
+    (iterm2.Color(230, 150, 45), False),                                     # near amber
+    (iterm2.Color(9, 9, 9), False),
+])
+def test_only_the_palette_reads_as_cuplines_own(color, ours):
+    prior = _PriorAppearance(use=True, use_dark=False, use_light=False, color=color)
+    assert _carries_state_colour(prior) is ours
+
+
+def test_a_disabled_slot_does_not_count_even_if_it_holds_amber():
+    """iTerm2 keeps the stored value after a clear; only an enabled slot shows."""
+    amber = iterm2.Color(230, 150, 30)
+    prior = _PriorAppearance(use=False, use_dark=False, use_light=False,
+                             color=amber, color_dark=amber, color_light=amber)
+    assert _carries_state_colour(prior) is False
