@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The fixture replay is strict: a WAITING or ACTION fixture must classify as labelled. UNKNOWN is accepted only for a fixture carrying `# abstain: allowed`, marked fixtures must stay a minority, and a test proves an always-abstaining classifier fails the replay.
+
 ### Fixed
 
 - A control the agent merely displays (a quoted menu in a Bash output block, a `(y/n)` in a log excerpt) no longer reads as ACTION. A control counts only when it sits within `LIVE_CONTROL_LINES` (24) non-blank lines of the bottom with no turn footer below it; the live control on file still classifies ACTION.

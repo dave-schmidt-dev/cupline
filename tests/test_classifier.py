@@ -372,26 +372,27 @@ def _fixtures():
     return sorted(glob.glob(os.path.join(FIXTURE_DIR, "*.txt")))
 
 
-@pytest.mark.parametrize("path", _fixtures() or [pytest.param(None, marks=pytest.mark.skip(
-    reason="no fixtures captured yet — use cupline.py --capture"))])
-def test_fixture_expectations(path):
-    """Replay captured terminal tails against their expected label.
+def _header(header, key, default=None):
+    line = next((ln for ln in header.splitlines() if ln.startswith(f"# {key}:")), None)
+    return line.split(":", 1)[1].strip() if line else default
 
-    UNKNOWN is accepted for any fixture: the placeholder classifier is allowed
-    to abstain. It is not allowed to be confidently wrong.
+
+def _replay(path, classify=classifier.classify):
+    """Run one fixture and return ``(expected, result, abstain_allowed)``.
+
+    ``None`` for ``expected`` means the fixture cannot be replayed honestly
+    (an unmeasured WORKING tail) and the caller should skip it. Factored out
+    of the test so the test below can prove the replay is able to fail at
+    all, by running it against a classifier that always abstains.
     """
     with open(path, encoding="utf-8") as handle:
         text = handle.read()
     header, _, body = text.partition("---\n")
-    expected_line = next(
-        (line for line in header.splitlines() if line.startswith("# expected:")), None
-    )
+    expected_line = _header(header, "expected")
     assert expected_line, f"{path} has no '# expected:' header"
-    expected = AgentState(expected_line.split(":", 1)[1].strip().lower())
-    redraw_line = next(
-        (line for line in header.splitlines() if line.startswith("# redrawing:")), None
-    )
-    redrawing = redraw_line.split(":", 1)[1].strip() if redraw_line else "unmeasured"
+    expected = AgentState(expected_line.lower())
+    redrawing = _header(header, "redrawing", "unmeasured")
+    abstain = _header(header, "abstain", "no") == "allowed"
 
     # A static tail cannot exercise the rule that actually decides WORKING,
     # because that rule reads redraw timing and a text file has none. Feeding a
@@ -399,29 +400,80 @@ def test_fixture_expectations(path):
     # and then read it back off the output, which tests nothing. Fixtures
     # captured since the header exists carry a measurement; older ones do not.
     if expected is AgentState.WORKING and redrawing != "yes":
-        pytest.skip(
-            "redraw state unmeasured at capture; a text-only fixture cannot "
-            "test the temporal rule that decides WORKING"
-        )
-
+        return None, None, abstain
     if redrawing == "yes":
         # The contract worth pinning: a repainting pane is WORKING no matter
         # what its text says. This is what stops an 'esc to interrupt' style
         # text rule being reintroduced.
-        result = classifier.classify(snap(body, since_redraw=0.1))
-        assert result is AgentState.WORKING, (
-            f"{os.path.basename(path)}: a repainting pane must be working, "
-            f"got {result.value}"
-        )
-        return
-
+        return AgentState.WORKING, classify(snap(body, since_redraw=0.1)), False
     # Stopped, which is what a WAITING or ACTION label already asserts. The
     # discrimination under test is the text half: does this stop need a
     # decision, or just a new instruction?
-    result = classifier.classify(snap(body))
-    assert result in (expected, AgentState.UNKNOWN), (
-        f"{os.path.basename(path)}: expected {expected.value} (or unknown), got {result.value}"
+    return expected, classify(snap(body)), abstain
+
+
+@pytest.mark.parametrize("path", _fixtures() or [pytest.param(None, marks=pytest.mark.skip(
+    reason="no fixtures captured yet — use cupline.py --capture"))])
+def test_fixture_expectations(path):
+    """Replay captured terminal tails against their expected label.
+
+    Strict by default. The replay used to accept UNKNOWN for every fixture,
+    on the grounds that abstaining is legitimate -- which meant a classifier
+    that abstained on the whole corpus passed unchanged, and the test
+    asserted almost nothing. Abstention is still allowed, but per fixture and
+    by hand: a tail whose stop genuinely cannot be read carries
+    ``# abstain: allowed`` in its header, written after someone looked at it.
+    """
+    expected, result, abstain = _replay(path)
+    if expected is None:
+        pytest.skip(
+            "redraw state unmeasured at capture; a text-only fixture cannot "
+            "test the temporal rule that decides WORKING"
+        )
+    allowed = (expected, AgentState.UNKNOWN) if abstain else (expected,)
+    assert result in allowed, (
+        f"{os.path.basename(path)}: expected {expected.value}"
+        f"{' (or unknown)' if abstain else ''}, got {result.value}"
     )
+
+
+def _stopped_fixtures():
+    """Fixtures whose replay actually asserts a WAITING or ACTION reading."""
+    return [p for p in _fixtures() if _replay(p)[0] in (AgentState.WAITING, AgentState.ACTION)]
+
+
+def test_abstention_is_the_exception_not_the_corpus():
+    """The opt-in cannot quietly become the old blanket tolerance.
+
+    If most stopped fixtures were marked ``abstain: allowed`` the replay would
+    be back to asserting nothing, so the marked ones have to stay a minority.
+    """
+    stopped = _stopped_fixtures()
+    if not stopped:
+        pytest.skip("no stopped fixtures on disk")
+    tolerated = [p for p in stopped if _replay(p)[2]]
+    assert len(tolerated) * 2 < len(stopped), (
+        f"{len(tolerated)} of {len(stopped)} stopped fixtures may abstain: "
+        "that is a blanket, not an exception"
+    )
+
+
+def test_the_replay_fails_a_classifier_that_always_abstains():
+    """The property the old replay lacked, pinned so it cannot be lost again.
+
+    Run every stopped fixture through a classifier that answers UNKNOWN to
+    everything. At least one strict fixture must disagree with it, or the
+    corpus has stopped testing the text half of the classifier at all.
+    """
+    stopped = _stopped_fixtures()
+    if not stopped:
+        pytest.skip("no stopped fixtures on disk")
+    failures = []
+    for path in stopped:
+        expected, result, abstain = _replay(path, lambda _snap: AgentState.UNKNOWN)
+        if not abstain and result is not expected:
+            failures.append(path)
+    assert failures, "an always-UNKNOWN classifier passed the whole corpus"
 
 
 # -- the signal has to be fed to be believed -------------------------------

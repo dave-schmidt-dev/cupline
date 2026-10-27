@@ -372,6 +372,13 @@ Capture watches the pane for `IDLE_AFTER_SECONDS` first and records a
 saved without it is a fixture for half the input. Older fixtures are marked
 `unmeasured` and the replay test skips the cases they cannot honestly exercise.
 
+The replay (`tests/test_classifier.py::test_fixture_expectations`) is strict: a
+WAITING or ACTION fixture must come back as labelled. A tail whose stop
+genuinely cannot be read may carry `# abstain: allowed` in its header, added by
+hand after review, and then UNKNOWN is accepted for it too. Marked fixtures must
+stay a minority of the corpus, and a separate test checks that a classifier
+answering UNKNOWN to everything still fails the replay.
+
 That redaction is a floor, not a guarantee: it cannot know that a project or
 client name is sensitive. An agent's screen is the user's real work, and a
 fixture outlives the session it came from — so the `fixtures/` directory is
