@@ -78,6 +78,22 @@ class TabPainter:
         #: bug fixed on 2026-08-14.
         self.pane_prior: dict[str, PriorAppearance] = {}
 
+    def reconcile(self, tabs) -> None:
+        """Reconcile ownership once against the complete current pane inventory."""
+        locations = {s.session_id: t.tab_id for t in tabs for s in t.sessions}
+        for sid in set(self.pane_tab) - locations.keys():
+            self.pane_applied.pop(sid, None)
+            self.pane_tab.pop(sid, None)
+            self.pane_own.pop(sid, None)
+            self.pane_prior.pop(sid, None)
+        for sid in self.pane_tab:
+            self.pane_tab[sid] = locations[sid]
+        live_tabs = {t.tab_id for t in tabs}
+        for tid in set(self.applied) | set(self.titled):
+            if tid not in live_tabs:
+                self.applied.pop(tid, None)
+                self.titled.pop(tid, None)
+
     @property
     def colored(self) -> set[str]:
         """Tabs carrying a colour — i.e. what needs undoing on exit.
@@ -192,6 +208,12 @@ class TabPainter:
         name = f"{project} +{others}" if others > 0 else project
         return f"{name}{TITLE_SEPARATOR}{word}"
 
+    def _held_verdict(self, sid: str, verdict: PaneVerdict) -> AgentState:
+        """Resolve UNKNOWN only against this pane's own current evidence."""
+        if verdict.state is AgentState.UNKNOWN and HOLD_ON_UNKNOWN and verdict.evidence_current:
+            return self.pane_own.get(sid, AgentState.UNKNOWN)
+        return verdict.state
+
     def _wanted(
         self,
         tab,
@@ -227,20 +249,8 @@ class TabPainter:
                 # Unwatched or never-read: no claim, so no colour.
                 wanted[sid] = AgentState.WORKING
                 continue
-            if (
-                verdict.state is AgentState.UNKNOWN
-                and HOLD_ON_UNKNOWN
-                and verdict.evidence_current
-            ):
-                # Hold this pane's OWN last reading, not what was last painted on
-                # it. Those differ for the active pane, which carries the tab
-                # aggregate: holding `pane_applied` there resurrected a colour the
-                # pane had never earned, so a background pane could sit red on the
-                # strength of a sibling's alert from while it had focus.
-                wanted[sid] = self.pane_own.get(sid, AgentState.UNKNOWN)
-                continue
-            self.pane_own[sid] = verdict.state
-            wanted[sid] = verdict.state
+            wanted[sid] = self._held_verdict(sid, verdict)
+            self.pane_own[sid] = wanted[sid]
 
         # The active pane's own verdict still has to be recorded even though it
         # is painted with the aggregate, or it has nothing to fall back to when
@@ -272,29 +282,16 @@ class TabPainter:
         # active pane is not carrying the tab's colour. Returning early here
         # dropped the tab bar to grey while an agent was still waiting — the
         # alert disappearing at the exact moment the user looked at the window.
-        if (
-            state is AgentState.UNKNOWN
-            and HOLD_ON_UNKNOWN
-            and hold
-            and tab.tab_id in self.colored
-        ):
-            state = self.applied.get(tab.tab_id, state)
+        if state is AgentState.UNKNOWN and HOLD_ON_UNKNOWN and hold:
+            if per_pane is not None:
+                # A sibling with current WORKING evidence cannot preserve a
+                # red earned by a different pane whose prompt has disappeared.
+                state = self.aggregate(self._held_verdict(sid, verdict)
+                                       for sid, verdict in per_pane.items())
+            elif tab.tab_id in self.colored:
+                state = self.applied.get(tab.tab_id, state)
         title = self.title_for(state, project, others)
         wanted = self._wanted(tab, state, per_pane)
-        # Forget panes this tab used to hold but no longer does. Without it a
-        # closed pane's entry survives forever, so `colored` keeps naming a tab
-        # that has nothing left to clear and `restore_painted` can never
-        # converge. Only entries claiming *this* tab are dropped, so a pane that
-        # moved to another tab is left for that tab's own sweep to re-record.
-        live = {session.session_id for session in tab.sessions}
-        stale = [
-            s for s, t in self.pane_tab.items() if t == tab.tab_id and s not in live
-        ]
-        for sid in stale:
-            self.pane_applied.pop(sid, None)
-            self.pane_tab.pop(sid, None)
-            self.pane_own.pop(sid, None)
-            self.pane_prior.pop(sid, None)
         # Dedupe on the whole per-pane picture, not the tab aggregate. The
         # aggregate can sit still while an individual pane changes state, and it
         # sits still every time focus moves between panes — both of which have to
@@ -414,10 +411,9 @@ class TabPainter:
 
     async def restore_painted(self, app) -> None:
         """Undo only what this process coloured. Used on clean shutdown."""
-        if not self.colored:
-            return
         by_id = {tab.tab_id: tab for window in app.windows for tab in window.tabs}
-        for tab_id in list(self.colored):
+        self.reconcile(list(by_id.values()))
+        for tab_id in self.colored | set(self.titled):
             tab = by_id.get(tab_id)
             if tab is not None:
                 await self.clear(tab)

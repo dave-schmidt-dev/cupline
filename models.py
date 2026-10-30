@@ -113,6 +113,8 @@ class SessionState:
     agent: Optional[str] = None
     job_name: Optional[str] = None
     job_pid: Optional[int] = None
+    agent_pid: Optional[int] = None
+    evidence_generation: int = 0
     #: Basename of the session's working directory — what the user calls the
     #: project. Shown in the tab title alongside the state word.
     project: Optional[str] = None
@@ -144,6 +146,7 @@ class SessionState:
     #: Set by the screen streamer, cleared by the sweeper. The streamer never
     #: fetches contents itself — see screen.py for why.
     dirty: bool = False
+    evidence_pending: bool = False
     #: Monotonic time of the last screen read. Drives the debounce ceiling so a
     #: continuously-animating session still gets looked at.
     last_read_at: float = 0.0
@@ -162,6 +165,25 @@ class SessionState:
     #: outlives its own evidence indefinitely — see evidence_is_current.
     confident_hash: Optional[str] = None
 
+    def note_agent(self, agent: Optional[str], pid: Optional[int], now: float) -> None:
+        """Invalidate evidence when the owning agent changes, not its helpers."""
+        if (self.agent, self.agent_pid) != (agent, pid):
+            self.evidence_generation += 1
+            self.last_screen_hash = self.last_ack_hash = self.confident_hash = None
+            self.last_terminal_tail = ""
+            self.previous_classification = AgentState.UNKNOWN
+            self.stable_since = None
+            self.last_read_at = 0.0
+            self.last_change_at = self.last_event_at = now
+            self.dirty = self.evidence_pending = True
+        self.agent, self.agent_pid = agent, pid
+
+    def note_streamer(self, healthy: bool, now: float) -> None:
+        """Resume observation with a fresh grace period after any coverage gap."""
+        if healthy and not self.streamer_ok:
+            self.note_event(now)
+        self.streamer_ok = healthy
+
     def has_been_read(self) -> bool:
         return self.last_screen_hash is not None
 
@@ -176,7 +198,7 @@ class SessionState:
         clock meant an animating session reported zero stable seconds forever,
         which is exactly the session a temporal heuristic needs to reason about.
         """
-        self.dirty = True
+        self.dirty = self.evidence_pending = True
         self.last_event_at = now
 
     def note_change(self, screen_hash: str, tail: str, now: float,
@@ -238,7 +260,8 @@ class SessionState:
         moved on.
         """
         return (
-            self.confident_hash is not None
+            not self.evidence_pending
+            and self.confident_hash is not None
             and self.last_screen_hash == self.confident_hash
         )
 
@@ -246,7 +269,7 @@ class SessionState:
         return TerminalSnapshot(
             session_id=self.session_id,
             agent=self.agent,
-            tail=self.last_terminal_tail,
+            tail="" if self.evidence_pending else self.last_terminal_tail,
             seconds_since_change=now - self.last_change_at,
             seconds_stable=0.0 if self.stable_since is None else now - self.stable_since,
             previous_state=self.previous_classification,

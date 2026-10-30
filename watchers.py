@@ -51,7 +51,7 @@ class SessionWatchers:
         self._watcher_retry_at.pop(session_id, None)
         state = self.registry.states.get(session_id)
         if state is not None:
-            state.streamer_ok = True
+            state.note_streamer(True, time.monotonic())
 
     def _note_watcher_failure(self, session_id: str, exc) -> None:
         """A watcher died. Say so, back off, and stop trusting its redraw clock.
@@ -63,7 +63,7 @@ class SessionWatchers:
         """
         state = self.registry.states.get(session_id)
         if state is not None:
-            state.streamer_ok = False
+            state.note_streamer(False, time.monotonic())
         failures = self._watcher_failures.get(session_id, 0) + 1
         self._watcher_failures[session_id] = failures
         delay = min(
@@ -86,13 +86,9 @@ class SessionWatchers:
         self.watchers[session_id] = asyncio.create_task(self._watch_session(session_id))
 
     def _drop_watcher(self, session_id: str) -> None:
-        # Does not touch `streamer_ok`. Cancelling re-raises CancelledError out
-        # of `_watch_session` without running either notifier, so a session that
-        # *survived* in the registry would be left claiming a healthy clock with
-        # no watcher feeding it. That cannot happen: `on_session_gone` pops the
-        # state, and the periodic prune only drops watchers whose session is
-        # already gone from the registry. Left as a note rather than defensive
-        # code, so the reason it is safe is checkable if either caller changes.
+        state = self.registry.states.get(session_id)
+        if state is not None:
+            state.note_streamer(False, time.monotonic())
         task = self.watchers.pop(session_id, None)
         self._watcher_failures.pop(session_id, None)
         self._watcher_retry_at.pop(session_id, None)
@@ -108,7 +104,8 @@ class SessionWatchers:
         if state is None:
             return
         log.info("new session %s agent=%s job=%s", state.label, state.agent, state.job_name)
-        self._ensure_watcher(session_id)
+        if state.is_agent():
+            self._ensure_watcher(session_id)
 
     async def on_session_gone(self, session_id: str) -> None:
         self._drop_watcher(session_id)

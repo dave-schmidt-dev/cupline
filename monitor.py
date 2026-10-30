@@ -50,7 +50,7 @@ class Cupline(SessionWatchers):
         #: session_id -> the screen hash that was up while that pane had
         #: keyboard focus. A pane you have looked at is not news until its
         #: screen moves on; see ``_focused_session_id`` and ACKNOWLEDGE_ON_FOCUS.
-        self.acked: dict[str, str] = {}
+        self.acked: dict[str, tuple[int, Optional[str]]] = {}
         self._stop = asyncio.Event()
 
     # -- the sweeper -------------------------------------------------------
@@ -100,7 +100,7 @@ class Cupline(SessionWatchers):
         """
         vote = state.previous_classification
         sid = state.session_id
-        seen = state.last_ack_hash
+        seen = (state.evidence_generation, state.last_ack_hash)
         if sid == focused:
             self.acked[sid] = seen
         elif self.acked.get(sid) != seen:
@@ -144,11 +144,14 @@ class Cupline(SessionWatchers):
             # discover() also prunes sessions iTerm2 no longer reports, which
             # covers a missed termination event — but the watcher task for a
             # pruned session would otherwise stay parked on a dead streamer.
-            for gone in set(self.watchers) - set(self.registry.states):
+            eligible = {s.session_id for s in self.registry.agent_sessions()}
+            tracked = set(self.watchers) | set(self.acked) | set(self._watcher_retry_at)
+            for gone in tracked - eligible:
                 self._drop_watcher(gone)
 
         tab_votes: dict[str, list[tuple[str, AgentState, Optional[str], bool]]] = {}
         tabs_by_id = {t.tab_id: t for w in self.app.windows for t in w.tabs}
+        self.painter.reconcile(list(tabs_by_id.values()))
         focused = self._focused_session_id()
 
         for state in self.registry.agent_sessions():
@@ -184,13 +187,6 @@ class Cupline(SessionWatchers):
             winners = [p for _, vote, p, _ in votes if vote is winner]
             project = next((p for p in winners if p), None)
             others = max(len(winners) - 1, 0)
-            # Keep holding an UNKNOWN only while some pane can still point at the
-            # screen its state came from. Panes with nothing to protect abstain
-            # rather than voting to hold, or a tab full of never-classified panes
-            # keeps a colour that the one pane which earned it has moved past.
-            hold = any(
-                current for _, vote, _, current in votes if vote is AgentState.UNKNOWN
-            )
             # The aggregate is still what the tab bar needs, but the panes each
             # get their own verdict: painting all three amber because one agent
             # stopped says three of them want you, which is the opposite of the
@@ -198,7 +194,7 @@ class Cupline(SessionWatchers):
             per_pane = {
                 sid: PaneVerdict(vote, current) for sid, vote, _, current in votes
             }
-            await self.painter.apply(tab, winner, project=project, hold=hold,
+            await self.painter.apply(tab, winner, project=project,
                                      others=others, per_pane=per_pane)
 
         # A tab only gets repainted while something in it still votes, and votes
@@ -211,7 +207,7 @@ class Cupline(SessionWatchers):
         #
         # The cost of being wrong is a *cleared* tab, not a false alert: if the
         # agent is still really there, the next sweep that resolves it repaints.
-        for tab_id in self.painter.colored - set(tab_votes):
+        for tab_id in (self.painter.colored | set(self.painter.titled)) - set(tab_votes):
             tab = tabs_by_id.get(tab_id)
             if tab is not None:
                 log.info("tab %s no longer has any agent; releasing", tab_id)
@@ -256,13 +252,19 @@ class Cupline(SessionWatchers):
         # its final prompt and went quiet", which is the amber this tool exists
         # to produce.
         state.dirty = False
+        pending = state.evidence_pending
+        state.evidence_pending = False
         try:
             contents = await session.async_get_screen_contents()
         except Exception as exc:  # noqa: BLE001
             log.debug("screen fetch failed for %s: %s", state.label, exc)
             state.dirty = True  # otherwise this session is never read again
+            state.evidence_pending = state.evidence_pending or pending
+            self._conclude(state, now, changed=False)
             return
 
+        if self.registry.states.get(state.session_id) is not state:
+            return
         lines = screenlib.lines_from_contents(contents)
         tail = screenlib.tail_text(lines, TAIL_LINES)
         digest = screenlib.screen_hash(tail)

@@ -63,18 +63,18 @@ NESTED_SHELL_CHAIN = {
 def test_node_foreground_job_resolves_to_claude(monkeypatch):
     """Claude Code, OpenCode and Cursor Agent all report a bare `node`."""
     install_table(monkeypatch, CLAUDE_CHAIN)
-    assert sessions.resolve_agent(93140) == "claude"
+    assert sessions.resolve_agent(93140)[0] == "claude"
 
 
 def test_helper_subprocess_resolves_to_codex(monkeypatch):
     """jobName was observed flipping between `codex` and `SkyComputerUseCl`."""
     install_table(monkeypatch, CODEX_CHAIN)
-    assert sessions.resolve_agent(77201) == "codex"
+    assert sessions.resolve_agent(77201)[0] == "codex"
 
 
 def test_agent_named_directly_is_found(monkeypatch):
     install_table(monkeypatch, CODEX_CHAIN)
-    assert sessions.resolve_agent(92678) == "codex"
+    assert sessions.resolve_agent(92678)[0] == "codex"
 
 
 def test_non_agent_program_is_not_claimed(monkeypatch):
@@ -102,7 +102,7 @@ def test_walk_passes_through_a_shell_the_agent_spawned(monkeypatch):
     Captured live as `zsh -> claude -> -zsh -> login -> iTermServer -> iTerm2`.
     """
     install_table(monkeypatch, NESTED_SHELL_CHAIN)
-    assert sessions.resolve_agent(41001) == "claude"
+    assert sessions.resolve_agent(41001)[0] == "claude"
 
 
 def test_iterm_plumbing_ends_the_walk(monkeypatch):
@@ -132,7 +132,7 @@ def test_login_shell_detection():
 
 def test_absolute_paths_are_matched_by_basename(monkeypatch):
     install_table(monkeypatch, {700: (600, "/opt/homebrew/bin/opencode"), 600: (1, "-zsh")})
-    assert sessions.resolve_agent(700) == "opencode"
+    assert sessions.resolve_agent(700)[0] == "opencode"
 
 
 # The three agents below were not running during the spike. Their launch shapes
@@ -146,7 +146,7 @@ def test_agy_resolves_from_its_binary(monkeypatch):
         800: (799, "/Users/dave/.local/bin/agy"),
         799: (1, "-zsh"),
     })
-    assert sessions.resolve_agent(800) == "agy"
+    assert sessions.resolve_agent(800)[0] == "agy"
 
 
 def test_cursor_agent_resolves_despite_being_a_node_script(monkeypatch):
@@ -159,7 +159,7 @@ def test_cursor_agent_resolves_despite_being_a_node_script(monkeypatch):
         810: (809, "/Users/dave/.local/bin/cursor-agent"),
         809: (1, "-zsh"),
     })
-    assert sessions.resolve_agent(810) == "cursor-agent"
+    assert sessions.resolve_agent(810)[0] == "cursor-agent"
 
 
 def test_opencode_exe_suffix_is_stripped(monkeypatch):
@@ -168,7 +168,7 @@ def test_opencode_exe_suffix_is_stripped(monkeypatch):
         820: (819, "/opt/homebrew/Cellar/opencode/1.18.15/libexec/bin/opencode.exe"),
         819: (1, "-zsh"),
     })
-    assert sessions.resolve_agent(820) == "opencode"
+    assert sessions.resolve_agent(820)[0] == "opencode"
 
 
 def test_missing_pid_is_none(monkeypatch):
@@ -263,7 +263,7 @@ def test_a_ps_failure_keeps_previously_identified_sessions(monkeypatch):
 
     asyncio.run(sessions.refresh_process_table(force=True))
 
-    assert sessions.resolve_agent(93140) == "claude", \
+    assert sessions.resolve_agent(93140)[0] == "claude", \
         "a ps failure unresolved an agent that was already identified"
 
 

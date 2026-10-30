@@ -157,6 +157,16 @@ whether or not iTerm2 is in front, and that is the last pane to hold focus, not
 one anybody is reading. Without that gate, every pane you touched before
 switching to a browser would count as watched.
 
+Lifecycle evidence belongs to the agent process resolved by `sessions.resolve_agent`,
+not its foreground helper. `SessionState` invalidates readings and focus
+acknowledgements when that agent changes, and restarts the observation grace
+period when a screen watcher recovers. A redraw awaiting a successful read
+cannot reuse an old prompt; a failed quiet reread alone does not erase current
+evidence. `TabPainter` resolves UNKNOWN holds against each pane's own evidence
+and reconciles the full pane inventory before painting or restoring, preserving
+prior appearance when a pane moves between tabs. These transitions are covered
+by the headless `tests/test_lifecycle.py` suite; live acceptance is separate.
+
 Each session gets one `IDLE_AFTER_SECONDS` grace period from the moment cupline
 first sees it, because silence that was not watched for is not evidence of
 silence. In practice a session that was already idle at startup is reported one

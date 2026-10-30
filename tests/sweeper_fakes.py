@@ -145,7 +145,12 @@ class FakeApp:
 
 def build(monkeypatch, sessions):
     """A Cupline wired to fakes, with every session resolving as an agent."""
-    monkeypatch.setattr(sessionlib, "resolve_agent", lambda pid, **kw: "claude")
+    monkeypatch.setattr(sessionlib, "resolve_agent", lambda pid: ("claude", 1234))
+
+    async def fake_ps():
+        return "1234 1 claude\n"
+
+    monkeypatch.setattr(sessionlib, "_run_ps", fake_ps)
     app = FakeApp([FakeWindow("w0", [FakeTab("t0", sessions)])])
     mon = Cupline(connection=None, app=app, show_tail=False, debounce=1.5)
 

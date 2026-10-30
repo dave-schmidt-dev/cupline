@@ -164,8 +164,8 @@ def _is_session_root(name: str) -> bool:
     return any(name.startswith(root) for root in SESSION_ROOT_COMMANDS)
 
 
-def resolve_agent(pid: Optional[int]) -> Optional[str]:
-    """Walk the ancestry of ``pid`` and return the agent command, if any.
+def resolve_agent(pid: Optional[int]) -> Optional[tuple[str, int]]:
+    """Walk the ancestry of ``pid`` and return (command, agent PID), if any.
 
     Returns None for ordinary shells and non-agent programs, which is what gates
     a session out of cupline entirely.
@@ -197,7 +197,7 @@ def resolve_agent(pid: Optional[int]) -> Optional[str]:
         if name.endswith(".exe"):
             name = name[: -len(".exe")]
         if name in AGENT_COMMANDS:
-            return name
+            return name, current
         # Boundary: the session's own login shell, or iTerm2's plumbing above
         # it. Anything past here belongs to the terminal, not to this session.
         if _is_login_shell(command) or _is_session_root(name):
@@ -218,13 +218,15 @@ async def describe(session, tab, window) -> SessionState:
     except (TypeError, ValueError):
         job_pid = None
 
+    identity = resolve_agent(job_pid)
     state = SessionState(
         session_id=session.session_id,
         tab_id=tab.tab_id,
         window_id=window.window_id,
         job_name=job_name,
         job_pid=job_pid,
-        agent=resolve_agent(job_pid),
+        agent=identity[0] if identity else None,
+        agent_pid=identity[1] if identity else None,
         project=project_name(await session.async_get_variable("path")),
     )
     state.label = await _label(session, state)
@@ -300,7 +302,8 @@ class SessionRegistry:
         except (TypeError, ValueError):
             state.job_pid = None
         state.job_name = await session.async_get_variable("jobName")
-        state.agent = resolve_agent(state.job_pid)
+        identity = resolve_agent(state.job_pid)
+        state.note_agent(*(identity or (None, None)), now=time.monotonic())
         # Agents change directory mid-session, so the project name is re-read
         # rather than fixed at discovery.
         state.project = project_name(await session.async_get_variable("path"))

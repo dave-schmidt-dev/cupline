@@ -14,7 +14,7 @@ rationale: The classifier must preserve the documented working/attention decisio
 area: ["tab_state.py", "tab_colors.py", "watchers.py", "sessions.py"]
 gate_test: tests/test_tab_state_restore.py
 threshold: 3
-rationale: A session-attention change must not clobber unrelated pane or tab state and must restore owned changes correctly.
+rationale: A session-attention change must not clobber unrelated pane or tab state and must restore owned changes correctly. Evidence belongs to the resolved agent process; watcher recovery restarts observation, and an UNKNOWN hold may protect only that pane's current evidence. Moving a pane must preserve its original appearance. Headless integration coverage: tests/test_lifecycle.py.
 
 ### INV-3 — Monitoring remains observable through blocking connection and sweep work
 area: ["monitor.py", "cupline.py"]
